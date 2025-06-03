@@ -20,6 +20,9 @@ function Append-ColoredText {
 
 function Get-SystemReport {
     $report = @()
+    $report += "=== RAPPORT INFO ==="
+    $report += "Tid: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    $report += "Unik ID: $(Get-Random -Minimum 1000 -Maximum 9999)"
 
     $os = Get-CimInstance Win32_OperatingSystem
     $cs = Get-CimInstance Win32_ComputerSystem
@@ -29,13 +32,14 @@ function Get-SystemReport {
     $baseboard = Get-CimInstance Win32_BaseBoard
     $ram = "{0:N2}" -f ($cs.TotalPhysicalMemory / 1GB)
 
-    $report += "=== SYSTEMINFORMASJON ==="
     $report += ""
+    $report += "=== SYSTEMINFORMASJON ==="
     $report += "Maskinnavn       : $($env:COMPUTERNAME)"
     $report += "Bruker           : $($env:USERNAME)"
     $report += "Domene           : $($cs.Domain)"
     $report += "Operativsystem   : $($os.Caption) ($($os.Version))"
     $report += "Systemtype       : $($os.OSArchitecture)"
+    $report += "Build            : $($os.BuildNumber)"
     $report += "Oppetid          : $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer"
     $report += "Prosessor        : $($cpu.Name)"
     $report += "RAM              : $ram GB"
@@ -49,13 +53,14 @@ function Get-SystemReport {
     Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Sort-Object DeviceID | ForEach-Object {
         $free = "{0:N1}" -f ($_.FreeSpace / 1GB)
         $total = "{0:N1}" -f ($_.Size / 1GB)
-        $report += "$($_.DeviceID)            : $free GB ledig av $total GB"
+        $percent = [math]::Round($_.FreeSpace / $_.Size * 100)
+        $report += "$($_.DeviceID): $free GB ledig av $total GB ($percent`%)"
     }
 
     $report += ""
     $report += "=== NETTVERK ==="
     Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "169.*" } | ForEach-Object {
-        $report += "$($_.InterfaceAlias) : $($_.IPAddress)"
+        $report += "$($_.InterfaceAlias): $($_.IPAddress)"
     }
 
     $batt = Get-CimInstance Win32_Battery
@@ -72,18 +77,26 @@ function Get-SystemReport {
     }
 
     $report += ""
-    $report += "=== VIKTIGE TJENESTER ==="
-    $services = "wuauserv", "Spooler", "WinDefend"
-    foreach ($s in $services) {
-        $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
-        if ($svc) {
-            $report += "$($svc.DisplayName) : $($svc.Status)"
+    $report += "=== ENHETER MED FEIL ==="
+    $badDevices = Get-PnpDevice | Where-Object { $_.Status -ne "OK" }
+    if ($badDevices) {
+        foreach ($d in $badDevices) {
+            $report += "[!] $($d.FriendlyName) : $($d.Status)"
         }
+    } else {
+        $report += "Ingen enhetsfeil funnet."
     }
 
     $report += ""
-    $report += "Rapport generert : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    $report += "Unik ID          : $(Get-Random -Minimum 1000 -Maximum 9999)"
+    $report += "=== TJENESTER SOM IKKE KJØRER (AUTOMATISK) ==="
+    $svc = Get-Service | Where-Object { $_.StartType -eq "Automatic" -and $_.Status -ne "Running" }
+    if ($svc) {
+        foreach ($s in $svc) {
+            $report += "$($s.DisplayName) : $($s.Status)"
+        }
+    } else {
+        $report += "Alle automatisk tjenestene kjører."
+    }
 
     return $report
 }
@@ -93,7 +106,7 @@ function Show-SystemReport {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "🖥️ PC Systemrapport"
-    $form.Size = New-Object System.Drawing.Size(900, 600)
+    $form.Size = New-Object System.Drawing.Size(950, 650)
     $form.StartPosition = "CenterScreen"
 
     $rich = New-Object System.Windows.Forms.RichTextBox
@@ -122,6 +135,9 @@ function Show-SystemReport {
         }
         elseif ($line -match "^\s*$") {
             Append-ColoredText -box $rich -text "" -color ([System.Drawing.Color]::White)
+        }
+        elseif ($line -match "^\[!\]") {
+            Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::OrangeRed)
         }
         elseif ($line -match "^[^:]+:") {
             $parts = $line -split ":", 2
