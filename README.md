@@ -16,12 +16,9 @@ Et PowerShell- og Bash-skript som samler inn viktig systeminformasjon og viser d
 - 🧾 Systemfeil fra siste 24 timer (Event Viewer)  
 - 🖥️ GUI i terminal-stil med farger (RichTextBox)  
 - 💾 Mulighet for lagring som `.txt` på skrivebord
-
 ### 🚀 Kjør direkte i PowerShell (ingen nedlasting)
 
-```powershell
-irm https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/main.ps1 | iex
-
+<pre> ```powershell irm https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/main.ps1 | iex ``` </pre>
 
 🍏 **macOS-funksjoner**  
 💻 Maskinnavn, innlogget bruker, OS-versjon og build  
