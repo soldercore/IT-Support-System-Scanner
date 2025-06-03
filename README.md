@@ -17,4 +17,4 @@ Et PowerShell-skript som samler inn viktig systeminformasjon og viser det i et b
 Åpne PowerShell og lim inn denne kommandoen:
 
 ```powershell
-irm https://raw.githubusercontent.com/<DITT_BRUKERNAVN>/<REPO_NAVN>/main/main.ps1 | iex
+irm https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/main.ps1 | iex
