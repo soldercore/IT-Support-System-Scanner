@@ -20,7 +20,7 @@ Et PowerShell- og Bash-skript som samler inn viktig systeminformasjon og viser d
 
 <pre> ```powershell irm https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/main.ps1 | iex ``` </pre>
 
-🍏 **macOS-funksjoner**  
+## 🍏 macOS-funksjoner
 💻 Maskinnavn, innlogget bruker, OS-versjon og build  
 🧠 CPU, RAM, maskinmodell og systemtype  
 💽 Diskbruk (bruk/ledig og prosent)  
