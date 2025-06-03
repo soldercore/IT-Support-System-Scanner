@@ -8,7 +8,6 @@ function Append-ColoredText {
         [System.Drawing.Color]$color,
         [bool]$newline = $true
     )
-
     $start = $box.TextLength
     $textToAdd = $text + ($(if ($newline) { "`r`n" } else { "" }))
     $box.AppendText($textToAdd)
@@ -21,8 +20,10 @@ function Append-ColoredText {
 
 function Get-SystemReport {
     $report = @()
+    $report += "=== RAPPORT INFO ==="
+    $report += "Tid: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    $report += "Unik ID: $(Get-Random -Minimum 1000 -Maximum 9999)"
 
-    # Systeminfo
     $os = Get-CimInstance Win32_OperatingSystem
     $cs = Get-CimInstance Win32_ComputerSystem
     $cpu = Get-CimInstance Win32_Processor
@@ -31,6 +32,7 @@ function Get-SystemReport {
     $baseboard = Get-CimInstance Win32_BaseBoard
     $ram = "{0:N2}" -f ($cs.TotalPhysicalMemory / 1GB)
 
+    $report += ""
     $report += "=== SYSTEMINFORMASJON ==="
     $report += "Bruker: $env:USERNAME"
     $report += "Maskinnavn: $env:COMPUTERNAME"
@@ -44,34 +46,35 @@ function Get-SystemReport {
     $report += "BIOS: $($bios.SMBIOSBIOSVersion)"
     $report += "Hovedkort: $($baseboard.Manufacturer) $($baseboard.Product)"
 
-    # Disker
-    $report += "`n=== DISKER ==="
+    $report += ""
+    $report += "=== DISKER ==="
     Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Sort-Object DeviceID | ForEach-Object {
         $free = "{0:N1}" -f ($_.FreeSpace / 1GB)
         $total = "{0:N1}" -f ($_.Size / 1GB)
         $report += "$($_.DeviceID): $free GB ledig av $total GB"
     }
 
-    # Nettverk
-    $report += "`n=== NETTVERK ==="
+    $report += ""
+    $report += "=== NETTVERK ==="
     Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "169.*" } | ForEach-Object {
         $report += "$($_.InterfaceAlias): $($_.IPAddress)"
     }
 
-    # Batteri
     $batt = Get-CimInstance Win32_Battery
     if ($batt) {
-        $report += "`n=== BATTERI ==="
+        $report += ""
+        $report += "=== BATTERI ==="
         $status = switch ($batt.BatteryStatus) {
             1 { "Ukjent" } 2 { "Lader" } 3 { "Ladet" } 4 { "Lav" } 5 { "Kritisk" }
             6 { "Lader ikke" } 7 { "Frakoblet" } 8 { "Lader og høy" }
             default { "Ukjent ($($batt.BatteryStatus))" }
         }
-        $report += "Status: $status | Kapasitet: $($batt.EstimatedChargeRemaining)%"
+        $report += "Status: $status"
+        $report += "Kapasitet: $($batt.EstimatedChargeRemaining)%"
     }
 
-    # Tjenester
-    $report += "`n=== VIKTIGE TJENESTER ==="
+    $report += ""
+    $report += "=== VIKTIGE TJENESTER ==="
     $services = "wuauserv", "Spooler", "WinDefend"
     foreach ($s in $services) {
         $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
@@ -87,8 +90,8 @@ function Show-SystemReport {
     $lines = Get-SystemReport
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "PC Systemrapport"
-    $form.Size = New-Object System.Drawing.Size(850, 600)
+    $form.Text = "🖥️ PC Systemrapport"
+    $form.Size = New-Object System.Drawing.Size(900, 600)
     $form.StartPosition = "CenterScreen"
 
     $rich = New-Object System.Windows.Forms.RichTextBox
@@ -101,8 +104,9 @@ function Show-SystemReport {
     $form.Controls.Add($rich)
 
     $saveButton = New-Object System.Windows.Forms.Button
-    $saveButton.Text = "Lagre rapport"
+    $saveButton.Text = "💾 Lagre rapport"
     $saveButton.Dock = "Bottom"
+    $saveButton.Height = 30
     $saveButton.Add_Click({
         $path = "$env:USERPROFILE\Desktop\PC-Rapport.txt"
         ($lines -join "`r`n") | Out-File -FilePath $path -Encoding UTF8
@@ -125,8 +129,7 @@ function Show-SystemReport {
             } else {
                 Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Lime)
             }
-        }
-        else {
+        } else {
             Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Lime)
         }
     }
