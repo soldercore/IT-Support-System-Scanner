@@ -20,9 +20,6 @@ function Append-ColoredText {
 
 function Get-SystemReport {
     $report = @()
-    $report += "=== RAPPORT INFO ==="
-    $report += "Tid: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    $report += "Unik ID: $(Get-Random -Minimum 1000 -Maximum 9999)"
 
     $os = Get-CimInstance Win32_OperatingSystem
     $cs = Get-CimInstance Win32_ComputerSystem
@@ -32,32 +29,33 @@ function Get-SystemReport {
     $baseboard = Get-CimInstance Win32_BaseBoard
     $ram = "{0:N2}" -f ($cs.TotalPhysicalMemory / 1GB)
 
-    $report += ""
     $report += "=== SYSTEMINFORMASJON ==="
-    $report += "Bruker: $env:USERNAME"
-    $report += "Maskinnavn: $env:COMPUTERNAME"
-    $report += "Operativsystem: $($os.Caption) ($($os.Version))"
-    $report += "Build: $($os.BuildNumber) | Systemtype: $($os.OSArchitecture)"
-    $report += "Oppetid: $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer"
-    $report += "Domene/Arbeidsgruppe: $($cs.Domain)"
-    $report += "Prosessor: $($cpu.Name)"
-    $report += "RAM: $ram GB"
-    $report += "GPU: $($gpu.Name) | Minne: {0:N1} MB" -f ($gpu.AdapterRAM / 1MB)
-    $report += "BIOS: $($bios.SMBIOSBIOSVersion)"
-    $report += "Hovedkort: $($baseboard.Manufacturer) $($baseboard.Product)"
+    $report += ""
+    $report += "Maskinnavn       : $($env:COMPUTERNAME)"
+    $report += "Bruker           : $($env:USERNAME)"
+    $report += "Domene           : $($cs.Domain)"
+    $report += "Operativsystem   : $($os.Caption) ($($os.Version))"
+    $report += "Systemtype       : $($os.OSArchitecture)"
+    $report += "Oppetid          : $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer"
+    $report += "Prosessor        : $($cpu.Name)"
+    $report += "RAM              : $ram GB"
+    $report += "GPU              : $($gpu.Name)"
+    $report += "GPU Minne        : {0:N1} MB" -f ($gpu.AdapterRAM / 1MB)
+    $report += "BIOS             : $($bios.SMBIOSBIOSVersion)"
+    $report += "Hovedkort        : $($baseboard.Manufacturer) $($baseboard.Product)"
 
     $report += ""
     $report += "=== DISKER ==="
     Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Sort-Object DeviceID | ForEach-Object {
         $free = "{0:N1}" -f ($_.FreeSpace / 1GB)
         $total = "{0:N1}" -f ($_.Size / 1GB)
-        $report += "$($_.DeviceID): $free GB ledig av $total GB"
+        $report += "$($_.DeviceID)            : $free GB ledig av $total GB"
     }
 
     $report += ""
     $report += "=== NETTVERK ==="
     Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "169.*" } | ForEach-Object {
-        $report += "$($_.InterfaceAlias): $($_.IPAddress)"
+        $report += "$($_.InterfaceAlias) : $($_.IPAddress)"
     }
 
     $batt = Get-CimInstance Win32_Battery
@@ -69,8 +67,8 @@ function Get-SystemReport {
             6 { "Lader ikke" } 7 { "Frakoblet" } 8 { "Lader og høy" }
             default { "Ukjent ($($batt.BatteryStatus))" }
         }
-        $report += "Status: $status"
-        $report += "Kapasitet: $($batt.EstimatedChargeRemaining)%"
+        $report += "Status           : $status"
+        $report += "Kapasitet        : $($batt.EstimatedChargeRemaining)%"
     }
 
     $report += ""
@@ -79,9 +77,13 @@ function Get-SystemReport {
     foreach ($s in $services) {
         $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
         if ($svc) {
-            $report += "$($svc.DisplayName): $($svc.Status)"
+            $report += "$($svc.DisplayName) : $($svc.Status)"
         }
     }
+
+    $report += ""
+    $report += "Rapport generert : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    $report += "Unik ID          : $(Get-Random -Minimum 1000 -Maximum 9999)"
 
     return $report
 }
