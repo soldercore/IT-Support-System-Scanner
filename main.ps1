@@ -62,42 +62,6 @@ function Get-SystemReport {
         }
     }
 
-    # Antivirus
-    $report += "`n=== ANTIVIRUS ==="
-    try {
-        $av = Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntivirusProduct
-        foreach ($a in $av) {
-            $state = $a.productState
-            $enabled = ($state -band 0x10) -ne 0
-            $updated = ($state -band 0x100000) -ne 0
-            $status = if ($enabled -and $updated) { "Aktiv og oppdatert" } elseif ($enabled) { "Aktiv men utdatert" } else { "Ikke aktiv" }
-            $report += "$($a.displayName): $status"
-        }
-    } catch {
-        $report += "Ingen antivirusinformasjon tilgjengelig."
-    }
-
-    # Windows Update status
-    $report += "`n=== WINDOWS UPDATE ==="
-    $wu = Get-WindowsUpdateLog -ErrorAction SilentlyContinue
-    if ($wu) {
-        $report += "Windows Update-logg generert."
-    } else {
-        $report += "Kan ikke hente Windows Update-logg."
-    }
-
-    # Systemfeil siste 24 timer
-    $report += "`n=== SYSTEMFEIL (siste 24t) ==="
-    $errors = Get-WinEvent -FilterHashtable @{LogName='System'; Level=2; StartTime=(Get-Date).AddHours(-24)} -ErrorAction SilentlyContinue
-    if ($errors) {
-        $report += "$($errors.Count) kritiske hendelser funnet."
-        $errors | Select-Object -First 5 | ForEach-Object {
-            $report += "$($_.TimeCreated): $($_.Message)"
-        }
-    } else {
-        $report += "Ingen kritiske hendelser siste 24 timer."
-    }
-
     return $report -join "`r`n"
 }
 
@@ -122,17 +86,16 @@ function Show-SystemReport {
 
     $form.Controls.Add($textbox)
 
-    # Lagre rapport til fil
     $saveButton = New-Object System.Windows.Forms.Button
     $saveButton.Text = "Lagre rapport"
     $saveButton.Dock = "Bottom"
     $saveButton.Add_Click({
         $path = "$env:USERPROFILE\Desktop\PC-Rapport.txt"
         $reportText | Out-File -FilePath $path -Encoding UTF8
-        [System.Windows.Forms.MessageBox]::Show("Rapport lagret til: $path", "Lagring fullført", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        [System.Windows.Forms.MessageBox]::Show("Rapport lagret til: $path")
     })
-    $form.Controls.Add($saveButton)
 
+    $form.Controls.Add($saveButton)
     $form.ShowDialog()
 }
 
