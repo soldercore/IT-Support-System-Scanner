@@ -23,16 +23,16 @@ Et PowerShell- og Bash-skript som samler inn viktig systeminformasjon og viser d
 irm https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/main.ps1 | iex
 
 
-🍏 macOS-funksjoner
-💻 Maskinnavn, innlogget bruker, OS-versjon og build
-🧠 CPU, RAM, maskinmodell og systemtype
-💽 Diskbruk (bruk/ledig og prosent)
-🔋 Batteristatus og lading
-🌐 IP-adresser, DNS-servere (Wi-Fi og Ethernet)
-📊 Prosesser med høy CPU-bruk (topp 3)
-❗ Tjenester som har feilet (launchctl)
-🪟 Automatisk GUI-popup i nytt Terminal-vindu
-🧾 Rapport vises i monospace layout og slettes etterpå
+🍏 **macOS-funksjoner**  
+💻 Maskinnavn, innlogget bruker, OS-versjon og build  
+🧠 CPU, RAM, maskinmodell og systemtype  
+💽 Diskbruk (bruk/ledig og prosent)  
+🔋 Batteristatus og lading  
+🌐 IP-adresser, DNS-servere (Wi-Fi og Ethernet)  
+📊 Prosesser med høy CPU-bruk (topp 3)  
+❗ Tjenester som har feilet (launchctl)  
+🪟 Automatisk GUI-popup i nytt Terminal-vindu  
+🧾 Rapport vises i monospace layout og slettes etterpå  
 🚀 Kjør direkte i macOS-terminal (ingen nedlasting)
 
 ```bash
