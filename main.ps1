@@ -1,20 +1,5 @@
+
 Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-function Append-ColoredText {
-    param (
-        [System.Windows.Forms.RichTextBox]$box,
-        [string]$text,
-        [System.Drawing.Color]$color,
-        [bool]$newline = $true
-    )
-
-    $box.SelectionStart = $box.TextLength
-    $box.SelectionLength = 0
-    $box.SelectionColor = $color
-    $box.AppendText($text + ($(if ($newline) { "`r`n" } else { "" })))
-    $box.SelectionColor = $box.ForeColor
-}
 
 function Get-SystemReport {
     $report = @()
@@ -28,18 +13,18 @@ function Get-SystemReport {
     $baseboard = Get-CimInstance Win32_BaseBoard
     $ram = "{0:N2}" -f ($cs.TotalPhysicalMemory / 1GB)
 
-    $report += @("=== SYSTEMINFORMASJON ===",
-        "Bruker: $env:USERNAME",
-        "Maskinnavn: $env:COMPUTERNAME",
-        "Operativsystem: $($os.Caption) ($($os.Version))",
-        "Build: $($os.BuildNumber) | Systemtype: $($os.OSArchitecture)",
-        "Oppetid: $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer",
-        "Domene/Arbeidsgruppe: $($cs.Domain)",
-        "Prosessor: $($cpu.Name)",
-        "RAM: $ram GB",
-        "GPU: $($gpu.Name) | Minne: {0:N1} MB" -f ($gpu.AdapterRAM / 1MB),
-        "BIOS: $($bios.SMBIOSBIOSVersion)",
-        "Hovedkort: $($baseboard.Manufacturer) $($baseboard.Product)")
+    $report += "=== SYSTEMINFORMASJON ==="
+    $report += "Bruker: $env:USERNAME"
+    $report += "Maskinnavn: $env:COMPUTERNAME"
+    $report += "Operativsystem: $($os.Caption) ($($os.Version))"
+    $report += "Build: $($os.BuildNumber) | Systemtype: $($os.OSArchitecture)"
+    $report += "Oppetid: $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer"
+    $report += "Domene/Arbeidsgruppe: $($cs.Domain)"
+    $report += "Prosessor: $($cpu.Name)"
+    $report += "RAM: $ram GB"
+    $report += "GPU: $($gpu.Name) | Minne: {0:N1} MB" -f ($gpu.AdapterRAM / 1MB)
+    $report += "BIOS: $($bios.SMBIOSBIOSVersion)"
+    $report += "Hovedkort: $($baseboard.Manufacturer) $($baseboard.Product)"
 
     # Disker
     $report += "`n=== DISKER ==="
@@ -77,50 +62,40 @@ function Get-SystemReport {
         }
     }
 
-    return $report
+    return $report -join "`r`n"
 }
 
 # === GUI-Vindu ===
 function Show-SystemReport {
-    $lines = Get-SystemReport
+    $reportText = Get-SystemReport
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "PC Systemrapport"
-    $form.Size = New-Object System.Drawing.Size(850, 600)
+    $form.Size = New-Object System.Drawing.Size(800, 600)
     $form.StartPosition = "CenterScreen"
 
-    $rich = New-Object System.Windows.Forms.RichTextBox
-    $rich.Multiline = $true
-    $rich.Dock = "Fill"
-    $rich.ReadOnly = $true
-    $rich.BackColor = 'Black'
-    $rich.ForeColor = 'Lime'
-    $rich.Font = New-Object System.Drawing.Font("Consolas", 10)
+    $textbox = New-Object System.Windows.Forms.TextBox
+    $textbox.Multiline = $true
+    $textbox.ScrollBars = "Vertical"
+    $textbox.ReadOnly = $true
+    $textbox.Dock = "Fill"
+    $textbox.Font = 'Consolas, 10pt'
+    $textbox.BackColor = "Black"
+    $textbox.ForeColor = "Lime"
+    $textbox.Text = $reportText
 
-    $form.Controls.Add($rich)
+    $form.Controls.Add($textbox)
 
     $saveButton = New-Object System.Windows.Forms.Button
     $saveButton.Text = "Lagre rapport"
     $saveButton.Dock = "Bottom"
     $saveButton.Add_Click({
         $path = "$env:USERPROFILE\Desktop\PC-Rapport.txt"
-        ($lines -join "`r`n") | Out-File -FilePath $path -Encoding UTF8
+        $reportText | Out-File -FilePath $path -Encoding UTF8
         [System.Windows.Forms.MessageBox]::Show("Rapport lagret til: $path")
     })
+
     $form.Controls.Add($saveButton)
-
-    foreach ($line in $lines) {
-        if ($line -match "^=== ") {
-            Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Cyan)
-        }
-        elseif ($line -match "^\s*$") {
-            Append-ColoredText -box $rich -text "" -color ([System.Drawing.Color]::White)
-        }
-        else {
-            Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Lime)
-        }
-    }
-
     $form.ShowDialog()
 }
 
