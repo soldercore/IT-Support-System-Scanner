@@ -1,3 +1,4 @@
+
 Add-Type -AssemblyName System.Windows.Forms
 
 function Get-SystemReport {
@@ -51,6 +52,16 @@ function Get-SystemReport {
         $report += "Status: $status | Kapasitet: $($batt.EstimatedChargeRemaining)%"
     }
 
+    # Tjenester
+    $report += "`n=== VIKTIGE TJENESTER ==="
+    $services = "wuauserv", "Spooler", "WinDefend"
+    foreach ($s in $services) {
+        $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
+        if ($svc) {
+            $report += "$($svc.DisplayName): $($svc.Status)"
+        }
+    }
+
     # Antivirus
     $report += "`n=== ANTIVIRUS ==="
     try {
@@ -66,7 +77,16 @@ function Get-SystemReport {
         $report += "Ingen antivirusinformasjon tilgjengelig."
     }
 
-    # Systemfeil
+    # Windows Update status
+    $report += "`n=== WINDOWS UPDATE ==="
+    $wu = Get-WindowsUpdateLog -ErrorAction SilentlyContinue
+    if ($wu) {
+        $report += "Windows Update-logg generert."
+    } else {
+        $report += "Kan ikke hente Windows Update-logg."
+    }
+
+    # Systemfeil siste 24 timer
     $report += "`n=== SYSTEMFEIL (siste 24t) ==="
     $errors = Get-WinEvent -FilterHashtable @{LogName='System'; Level=2; StartTime=(Get-Date).AddHours(-24)} -ErrorAction SilentlyContinue
     if ($errors) {
@@ -101,6 +121,18 @@ function Show-SystemReport {
     $textbox.Text = $reportText
 
     $form.Controls.Add($textbox)
+
+    # Lagre rapport til fil
+    $saveButton = New-Object System.Windows.Forms.Button
+    $saveButton.Text = "Lagre rapport"
+    $saveButton.Dock = "Bottom"
+    $saveButton.Add_Click({
+        $path = "$env:USERPROFILE\Desktop\PC-Rapport.txt"
+        $reportText | Out-File -FilePath $path -Encoding UTF8
+        [System.Windows.Forms.MessageBox]::Show("Rapport lagret til: $path", "Lagring fullført", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    })
+    $form.Controls.Add($saveButton)
+
     $form.ShowDialog()
 }
 
