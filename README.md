@@ -18,3 +18,6 @@ Et PowerShell-skript som samler inn viktig systeminformasjon og viser det i et b
 
 ```powershell
 irm https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/main.ps1 | iex
+
+```bash
+curl -s https://raw.githubusercontent.com/soldercore/IT-Support-System-Scanner/main/mac-systemrapport.sh | bash
