@@ -9,10 +9,13 @@ function Append-ColoredText {
         [bool]$newline = $true
     )
 
+    $start = $box.TextLength
+    $textToAdd = $text + ($(if ($newline) { "`r`n" } else { "" }))
+    $box.AppendText($textToAdd)
+    $box.Select($start, $text.Length)
+    $box.SelectionColor = $color
     $box.SelectionStart = $box.TextLength
     $box.SelectionLength = 0
-    $box.SelectionColor = $color
-    $box.AppendText($text + ($(if ($newline) { "`r`n" } else { "" })))
     $box.SelectionColor = $box.ForeColor
 }
 
@@ -28,18 +31,18 @@ function Get-SystemReport {
     $baseboard = Get-CimInstance Win32_BaseBoard
     $ram = "{0:N2}" -f ($cs.TotalPhysicalMemory / 1GB)
 
-    $report += @("=== SYSTEMINFORMASJON ===",
-        "Bruker: $env:USERNAME",
-        "Maskinnavn: $env:COMPUTERNAME",
-        "Operativsystem: $($os.Caption) ($($os.Version))",
-        "Build: $($os.BuildNumber) | Systemtype: $($os.OSArchitecture)",
-        "Oppetid: $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer",
-        "Domene/Arbeidsgruppe: $($cs.Domain)",
-        "Prosessor: $($cpu.Name)",
-        "RAM: $ram GB",
-        "GPU: $($gpu.Name) | Minne: {0:N1} MB" -f ($gpu.AdapterRAM / 1MB),
-        "BIOS: $($bios.SMBIOSBIOSVersion)",
-        "Hovedkort: $($baseboard.Manufacturer) $($baseboard.Product)")
+    $report += "=== SYSTEMINFORMASJON ==="
+    $report += "Bruker: $env:USERNAME"
+    $report += "Maskinnavn: $env:COMPUTERNAME"
+    $report += "Operativsystem: $($os.Caption) ($($os.Version))"
+    $report += "Build: $($os.BuildNumber) | Systemtype: $($os.OSArchitecture)"
+    $report += "Oppetid: $([math]::Round((New-TimeSpan -Start $os.LastBootUpTime).TotalHours, 1)) timer"
+    $report += "Domene/Arbeidsgruppe: $($cs.Domain)"
+    $report += "Prosessor: $($cpu.Name)"
+    $report += "RAM: $ram GB"
+    $report += "GPU: $($gpu.Name) | Minne: {0:N1} MB" -f ($gpu.AdapterRAM / 1MB)
+    $report += "BIOS: $($bios.SMBIOSBIOSVersion)"
+    $report += "Hovedkort: $($baseboard.Manufacturer) $($baseboard.Product)"
 
     # Disker
     $report += "`n=== DISKER ==="
@@ -80,7 +83,6 @@ function Get-SystemReport {
     return $report
 }
 
-# === GUI-Vindu ===
 function Show-SystemReport {
     $lines = Get-SystemReport
 
@@ -94,9 +96,8 @@ function Show-SystemReport {
     $rich.Dock = "Fill"
     $rich.ReadOnly = $true
     $rich.BackColor = 'Black'
-    $rich.ForeColor = 'Lime'
+    $rich.ForeColor = 'White'
     $rich.Font = New-Object System.Drawing.Font("Consolas", 10)
-
     $form.Controls.Add($rich)
 
     $saveButton = New-Object System.Windows.Forms.Button
@@ -112,9 +113,20 @@ function Show-SystemReport {
     foreach ($line in $lines) {
         if ($line -match "^=== ") {
             Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Cyan)
-        } elseif ($line -match "^\s*$") {
+        }
+        elseif ($line -match "^\s*$") {
             Append-ColoredText -box $rich -text "" -color ([System.Drawing.Color]::White)
-        } else {
+        }
+        elseif ($line -match "^[^:]+:") {
+            $parts = $line -split ":", 2
+            if ($parts.Count -eq 2) {
+                Append-ColoredText -box $rich -text ($parts[0] + ":") -color ([System.Drawing.Color]::White) -newline:$false
+                Append-ColoredText -box $rich -text (" " + $parts[1].Trim()) -color ([System.Drawing.Color]::Lime)
+            } else {
+                Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Lime)
+            }
+        }
+        else {
             Append-ColoredText -box $rich -text $line -color ([System.Drawing.Color]::Lime)
         }
     }
@@ -122,5 +134,4 @@ function Show-SystemReport {
     $form.ShowDialog()
 }
 
-# Kjør GUI
 Show-SystemReport
