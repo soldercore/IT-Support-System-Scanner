@@ -72,7 +72,7 @@ if ($Script:UseGui) {
 $Script:ScannerConfig = [ordered]@{
     ProductName          = "Sagene Data IT Support System Scanner"
     Vendor               = "Sagene Data"
-    Version              = "4.0.0"
+    Version              = "4.1.0-layout-fixed"
     EventLookbackDays    = 3
     MaxEvents            = 20
     DiskWarningPercent   = 20
