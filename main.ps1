@@ -1221,8 +1221,9 @@ if ($Script:UseGui) {
             [Parameter(Mandatory)]
             [System.Windows.Forms.RichTextBox]$Box,
 
-            [Parameter(Mandatory)]
-            [string]$Text,
+            [AllowEmptyString()]
+            [AllowNull()]
+            [string]$Text = "",
 
             [Parameter(Mandatory)]
             [System.Drawing.Color]$Color,
@@ -1232,13 +1233,21 @@ if ($Script:UseGui) {
             [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular
         )
 
+        if ($null -eq $Text) {
+            $Text = ""
+        }
+
         $start = $Box.TextLength
         $textToAdd = $Text + $(if ($NewLine) { "`r`n" } else { "" })
 
         $Box.AppendText($textToAdd)
-        $Box.Select($start, $Text.Length)
-        $Box.SelectionColor = $Color
-        $Box.SelectionFont = New-Object System.Drawing.Font($Box.Font, $Style)
+
+        if ($Text.Length -gt 0) {
+            $Box.Select($start, $Text.Length)
+            $Box.SelectionColor = $Color
+            $Box.SelectionFont = New-Object System.Drawing.Font($Box.Font, $Style)
+        }
+
         $Box.SelectionStart = $Box.TextLength
         $Box.SelectionLength = 0
         $Box.SelectionColor = $Box.ForeColor
