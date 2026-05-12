@@ -62,6 +62,14 @@ if ($Script:UseGui -and [System.Threading.Thread]::CurrentThread.GetApartmentSta
 if ($Script:UseGui) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeMethods {
+    [DllImport("user32.dll")]
+    public static extern bool HideCaret(IntPtr hWnd);
+}
+"@
     [System.Windows.Forms.Application]::EnableVisualStyles()
 }
 
@@ -280,15 +288,14 @@ function Protect-ReportText {
 
 function Get-SageneDataAsciiLogo {
 @"
-   _____                              ____        __
-  / ___/____ _____ ____  ____  ___   / __ \____ _/ /_____ _
-  \__ \/ __ `/ __ `/ _ \/ __ \/ _ \ / / / / __ `/ __/ __ `/
- ___/ / /_/ / /_/ /  __/ / / /  __// /_/ / /_/ / /_/ /_/ /
-/____/\__,_/\__, /\___/_/ /_/\___//_____/\__,_/\__/\__,_/
-           /____/
+███████╗ █████╗  ██████╗ ███████╗███╗   ██╗███████╗    ██████╗  █████╗ ████████╗ █████╗
+██╔════╝██╔══██╗██╔════╝ ██╔════╝████╗  ██║██╔════╝    ██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗
+███████╗███████║██║  ███╗█████╗  ██╔██╗ ██║█████╗      ██║  ██║███████║   ██║   ███████║
+╚════██║██╔══██║██║   ██║██╔══╝  ██║╚██╗██║██╔══╝      ██║  ██║██╔══██║   ██║   ██╔══██║
+███████║██║  ██║╚██████╔╝███████╗██║ ╚████║███████╗    ██████╔╝██║  ██║   ██║   ██║  ██║
+╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚══════╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
 
-        SAGENE DATA
-        IT SUPPORT SYSTEM SCANNER
+                         IT SUPPORT SYSTEM SCANNER
 "@
 }
 
@@ -1263,16 +1270,26 @@ if ($Script:UseGui) {
         $Box.Clear()
         $text = Convert-ReportToText -Report $Report
         $lines = $text -split "`r?`n"
+        $inLogo = $true
 
         foreach ($line in $lines) {
-            if ($line -match "SAGENE DATA|IT SUPPORT SYSTEM SCANNER|^   _____|^  /|^ ___|^/____|^\s+/____") {
-                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(0, 217, 255)) -Style ([System.Drawing.FontStyle]::Bold)
+            if ([string]::IsNullOrEmpty($line)) {
+                $Box.AppendText("`r`n")
+                continue
+            }
+
+            if ($line -match "^=+$" -or $line.Trim() -eq "REPORT") {
+                $inLogo = $false
+            }
+
+            if ($inLogo) {
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(0, 255, 65)) -Style ([System.Drawing.FontStyle]::Bold)
             }
             elseif ($line -match "^=+$") {
                 Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(70, 70, 70))
             }
             elseif ($line -match "^\s[A-Z][A-Z ]+$") {
-                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(88, 166, 255)) -Style ([System.Drawing.FontStyle]::Bold)
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(0, 255, 65)) -Style ([System.Drawing.FontStyle]::Bold)
             }
             elseif ($line -match "^\[OK\]") {
                 Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "OK")
@@ -1293,12 +1310,13 @@ if ($Script:UseGui) {
                 Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::Khaki)
             }
             else {
-                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::Gainsboro)
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(220, 255, 235))
             }
         }
 
         $Box.SelectionStart = 0
         $Box.ScrollToCaret()
+        [NativeMethods]::HideCaret($Box.Handle) | Out-Null
     }
 
     function Save-ReportFileDialog {
@@ -1392,7 +1410,7 @@ if ($Script:UseGui) {
 
         $subtitle = New-Object System.Windows.Forms.Label
         $subtitle.Text = "IKT SUPPORT // SYSTEM TRIAGE // READ-ONLY"
-        $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 229, 255)
+        $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 255, 65)
         $subtitle.Font = New-Object System.Drawing.Font($monoFontName, 9, [System.Drawing.FontStyle]::Regular)
         $subtitle.AutoSize = $true
         $subtitle.Location = New-Object System.Drawing.Point(25, 54)
@@ -1418,7 +1436,7 @@ if ($Script:UseGui) {
         $rich.ReadOnly = $true
         $rich.BorderStyle = "None"
         $rich.BackColor = [System.Drawing.Color]::FromArgb(0, 0, 0)
-        $rich.ForeColor = [System.Drawing.Color]::FromArgb(220, 255, 235)
+        $rich.ForeColor = [System.Drawing.Color]::FromArgb(0, 255, 65)
         $rich.Font = New-Object System.Drawing.Font($monoFontName, 10)
         $rich.WordWrap = $false
         $rich.DetectUrls = $false
@@ -1448,7 +1466,7 @@ if ($Script:UseGui) {
             $button.BackColor = [System.Drawing.Color]::FromArgb(13, 18, 24)
             $button.ForeColor = [System.Drawing.Color]::FromArgb(220, 255, 235)
             $button.FlatStyle = "Flat"
-            $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 229, 255)
+            $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 255, 65)
             $button.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(18, 35, 42)
             $button.Font = New-Object System.Drawing.Font($monoFontName, 9, [System.Drawing.FontStyle]::Bold)
             $button.Add_Click($OnClick)
