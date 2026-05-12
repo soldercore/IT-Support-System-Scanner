@@ -705,21 +705,18 @@ function Get-SystemScannerReport {
         }
     }
 
-    $sections["Devices With Problems"] = Invoke-SafeSection -Name "Devices With Problems" -Checks $checks -Script {
-        if (-not (Get-Command Get-PnpDevice -ErrorAction SilentlyContinue)) {
-            Add-Check $checks (New-Check -Category "Devices" -Name "PnP devices" -Status "UNKNOWN" -Details "Get-PnpDevice is not available.")
-            return "Get-PnpDevice is not available."
-        }
+    $sections["Device Manager Problems"] = Invoke-SafeSection -Name "Device Manager Problems" -Checks $checks -Script {
+        $problemDevices = @(Get-CimInstance Win32_PnPEntity -ErrorAction Stop | Where-Object {
+            $null -ne $_.ConfigManagerErrorCode -and $_.ConfigManagerErrorCode -ne 0
+        })
 
-        $badDevices = @(Get-PnpDevice | Where-Object { $_.Status -ne "OK" })
-
-        if ($badDevices.Count -gt 0) {
-            Add-Check $checks (New-Check -Category "Devices" -Name "Device errors" -Status "WARNING" -Details "$($badDevices.Count) device(s) have non-OK status." -Recommendation "Check Device Manager and driver status.")
-            $badDevices | Select-Object FriendlyName, Class, Status, InstanceId
+        if ($problemDevices.Count -gt 0) {
+            Add-Check $checks (New-Check -Category "Devices" -Name "Driver/device problems" -Status "WARNING" -Details "$($problemDevices.Count) device(s) have a real Device Manager error code." -Recommendation "Open Device Manager and inspect devices with non-zero ConfigManagerErrorCode.")
+            $problemDevices | Select-Object Name, PNPClass, Status, ConfigManagerErrorCode, DeviceID
         }
         else {
-            Add-Check $checks (New-Check -Category "Devices" -Name "Device errors" -Status "OK" -Details "No device errors found.")
-            "No device errors found."
+            Add-Check $checks (New-Check -Category "Devices" -Name "Driver/device problems" -Status "OK" -Details "No devices with real Device Manager error codes found.")
+            "No devices with real Device Manager error codes found."
         }
     }
 
@@ -1352,57 +1349,86 @@ if ($Script:UseGui) {
     function Show-SystemScannerGui {
         $form = New-Object System.Windows.Forms.Form
         $form.Text = "Sagene Data — IT Support System Scanner"
-        $form.Size = New-Object System.Drawing.Size(1220, 850)
-        $form.MinimumSize = New-Object System.Drawing.Size(980, 650)
+        $form.Size = New-Object System.Drawing.Size(1240, 860)
+        $form.MinimumSize = New-Object System.Drawing.Size(1040, 700)
         $form.StartPosition = "CenterScreen"
-        $form.BackColor = [System.Drawing.Color]::FromArgb(8, 8, 8)
+        $form.BackColor = [System.Drawing.Color]::FromArgb(4, 6, 8)
+
+        $monoFontName = "Consolas"
+        foreach ($candidate in @("Cascadia Mono", "Cascadia Code", "JetBrains Mono", "Consolas")) {
+            try {
+                $testFont = New-Object System.Drawing.Font($candidate, 10)
+                if ($testFont.Name -eq $candidate) {
+                    $monoFontName = $candidate
+                    break
+                }
+            }
+            catch { }
+        }
+
+        $root = New-Object System.Windows.Forms.TableLayoutPanel
+        $root.Dock = "Fill"
+        $root.RowCount = 3
+        $root.ColumnCount = 1
+        $root.BackColor = [System.Drawing.Color]::FromArgb(4, 6, 8)
+        [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 96)))
+        [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+        [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 64)))
+        $form.Controls.Add($root)
 
         $header = New-Object System.Windows.Forms.Panel
-        $header.Dock = "Top"
-        $header.Height = 82
-        $header.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
-        $form.Controls.Add($header)
+        $header.Dock = "Fill"
+        $header.Padding = New-Object System.Windows.Forms.Padding(22, 14, 22, 10)
+        $header.BackColor = [System.Drawing.Color]::FromArgb(8, 10, 14)
+        $root.Controls.Add($header, 0, 0)
 
         $title = New-Object System.Windows.Forms.Label
         $title.Text = "SAGENE DATA"
-        $title.ForeColor = [System.Drawing.Color]::White
-        $title.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+        $title.ForeColor = [System.Drawing.Color]::FromArgb(235, 245, 255)
+        $title.Font = New-Object System.Drawing.Font($monoFontName, 20, [System.Drawing.FontStyle]::Bold)
         $title.AutoSize = $true
-        $title.Location = New-Object System.Drawing.Point(18, 12)
+        $title.Location = New-Object System.Drawing.Point(22, 14)
         $header.Controls.Add($title)
 
         $subtitle = New-Object System.Windows.Forms.Label
-        $subtitle.Text = "IT Support System Scanner"
-        $subtitle.ForeColor = [System.Drawing.Color]::Silver
-        $subtitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+        $subtitle.Text = "IKT SUPPORT // SYSTEM TRIAGE // READ-ONLY"
+        $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 229, 255)
+        $subtitle.Font = New-Object System.Drawing.Font($monoFontName, 9, [System.Drawing.FontStyle]::Regular)
         $subtitle.AutoSize = $true
-        $subtitle.Location = New-Object System.Drawing.Point(21, 48)
+        $subtitle.Location = New-Object System.Drawing.Point(25, 54)
         $header.Controls.Add($subtitle)
 
         $statusLabel = New-Object System.Windows.Forms.Label
         $statusLabel.Text = "STATUS: SCANNING"
         $statusLabel.ForeColor = [System.Drawing.Color]::Khaki
-        $statusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+        $statusLabel.Font = New-Object System.Drawing.Font($monoFontName, 12, [System.Drawing.FontStyle]::Bold)
         $statusLabel.AutoSize = $true
         $statusLabel.Anchor = "Top,Right"
-        $statusLabel.Location = New-Object System.Drawing.Point(930, 28)
+        $statusLabel.Location = New-Object System.Drawing.Point(870, 32)
         $header.Controls.Add($statusLabel)
 
-        $buttonPanel = New-Object System.Windows.Forms.Panel
-        $buttonPanel.Dock = "Bottom"
-        $buttonPanel.Height = 56
-        $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
-        $form.Controls.Add($buttonPanel)
+        $bodyPanel = New-Object System.Windows.Forms.Panel
+        $bodyPanel.Dock = "Fill"
+        $bodyPanel.Padding = New-Object System.Windows.Forms.Padding(0, 10, 0, 10)
+        $bodyPanel.BackColor = [System.Drawing.Color]::FromArgb(4, 6, 8)
+        $root.Controls.Add($bodyPanel, 0, 1)
 
         $rich = New-Object System.Windows.Forms.RichTextBox
         $rich.Dock = "Fill"
         $rich.ReadOnly = $true
         $rich.BorderStyle = "None"
-        $rich.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 5)
-        $rich.ForeColor = [System.Drawing.Color]::Gainsboro
-        $rich.Font = New-Object System.Drawing.Font("Consolas", 10)
+        $rich.BackColor = [System.Drawing.Color]::FromArgb(0, 0, 0)
+        $rich.ForeColor = [System.Drawing.Color]::FromArgb(220, 255, 235)
+        $rich.Font = New-Object System.Drawing.Font($monoFontName, 10)
         $rich.WordWrap = $false
-        $form.Controls.Add($rich)
+        $rich.DetectUrls = $false
+        $bodyPanel.Controls.Add($rich)
+
+        $buttonPanel = New-Object System.Windows.Forms.Panel
+        $buttonPanel.Dock = "Fill"
+        $buttonPanel.Padding = New-Object System.Windows.Forms.Padding(12, 10, 12, 10)
+        $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(8, 10, 14)
+        $root.Controls.Add($buttonPanel, 0, 2)
 
         $script:CurrentReport = $null
 
@@ -1411,27 +1437,28 @@ if ($Script:UseGui) {
                 [string]$Text,
                 [int]$X,
                 [scriptblock]$OnClick,
-                [int]$Width = 118
+                [int]$Width = 120
             )
 
             $button = New-Object System.Windows.Forms.Button
             $button.Text = $Text
             $button.Width = $Width
-            $button.Height = 34
-            $button.Location = New-Object System.Drawing.Point($X, 11)
-            $button.BackColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
-            $button.ForeColor = [System.Drawing.Color]::White
+            $button.Height = 36
+            $button.Location = New-Object System.Drawing.Point($X, 13)
+            $button.BackColor = [System.Drawing.Color]::FromArgb(13, 18, 24)
+            $button.ForeColor = [System.Drawing.Color]::FromArgb(220, 255, 235)
             $button.FlatStyle = "Flat"
-            $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
-            $button.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+            $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 229, 255)
+            $button.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(18, 35, 42)
+            $button.Font = New-Object System.Drawing.Font($monoFontName, 9, [System.Drawing.FontStyle]::Bold)
             $button.Add_Click($OnClick)
             $buttonPanel.Controls.Add($button)
             return $button
         }
 
-        New-ScannerButton -Text "Rescan" -X 12 -OnClick {
+        New-ScannerButton -Text "RESCAN" -X 12 -OnClick {
             $rich.Clear()
-            Append-RichText -Box $rich -Text "Scanning..." -Color ([System.Drawing.Color]::Khaki)
+            Append-RichText -Box $rich -Text "Scanning system triage..." -Color ([System.Drawing.Color]::Khaki)
             $form.Refresh()
 
             $script:CurrentReport = Get-SystemScannerReport
@@ -1440,27 +1467,27 @@ if ($Script:UseGui) {
             Render-ReportInBox -Box $rich -Report $script:CurrentReport
         } | Out-Null
 
-        New-ScannerButton -Text "Save TXT" -X 140 -OnClick {
+        New-ScannerButton -Text "TXT" -X 142 -Width 86 -OnClick {
             if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "TXT" }
         } | Out-Null
 
-        New-ScannerButton -Text "Save HTML" -X 268 -OnClick {
+        New-ScannerButton -Text "HTML" -X 238 -Width 86 -OnClick {
             if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "HTML" }
         } | Out-Null
 
-        New-ScannerButton -Text "Save JSON" -X 396 -OnClick {
+        New-ScannerButton -Text "JSON" -X 334 -Width 86 -OnClick {
             if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "JSON" }
         } | Out-Null
 
-        New-ScannerButton -Text "Anon TXT" -X 524 -Width 110 -OnClick {
+        New-ScannerButton -Text "ANON TXT" -X 430 -Width 116 -OnClick {
             if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "TXT" -Anonymized }
         } | Out-Null
 
-        New-ScannerButton -Text "Anon HTML" -X 644 -Width 115 -OnClick {
+        New-ScannerButton -Text "ANON HTML" -X 556 -Width 126 -OnClick {
             if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "HTML" -Anonymized }
         } | Out-Null
 
-        New-ScannerButton -Text "Copy Summary" -X 769 -Width 130 -OnClick {
+        New-ScannerButton -Text "COPY SUMMARY" -X 692 -Width 150 -OnClick {
             if ($script:CurrentReport) {
                 $summary = @()
                 $summary += "Sagene Data System Scanner"
@@ -1481,7 +1508,7 @@ if ($Script:UseGui) {
         } | Out-Null
 
         $form.Add_Shown({
-            Append-RichText -Box $rich -Text "Scanning..." -Color ([System.Drawing.Color]::Khaki)
+            Append-RichText -Box $rich -Text "Scanning system triage..." -Color ([System.Drawing.Color]::Khaki)
             $form.Refresh()
 
             $script:CurrentReport = Get-SystemScannerReport
