@@ -5,7 +5,13 @@
 
 .DESCRIPTION
     Read-only Windows support scanner for IT consultants.
-    Produces a structured health report with GUI, TXT, HTML, JSON and anonymized exports.
+    Supports GUI mode, CLI mode, TXT/HTML/JSON export, anonymized export, health scoring,
+    self-test, and structured support findings.
+
+.EXAMPLES
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File .\SageneData-SystemScanner.ps1
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SageneData-SystemScanner.ps1 -NoGui -ExportDirectory .\reports -Formats TXT,HTML,JSON -Anonymized
 
 .NOTES
     - Read-only
@@ -14,6 +20,20 @@
     - Best results when run as Administrator
 #>
 
+[CmdletBinding()]
+param(
+    [switch]$NoGui,
+
+    [string]$ExportDirectory,
+
+    [ValidateSet("TXT", "HTML", "JSON")]
+    [string[]]$Formats = @("TXT"),
+
+    [switch]$Anonymized,
+
+    [switch]$SelfTest
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -21,38 +41,56 @@ if ($PSVersionTable.PSEdition -eq "Core" -and -not $IsWindows) {
     throw "This scanner is Windows-only."
 }
 
-if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne "STA" -and $PSCommandPath) {
+$Script:UseGui = -not $NoGui
+
+if ($Script:UseGui -and [System.Threading.Thread]::CurrentThread.GetApartmentState() -ne "STA" -and $PSCommandPath) {
     $exe = if ($PSVersionTable.PSEdition -eq "Core") { "pwsh.exe" } else { "powershell.exe" }
-    Start-Process -FilePath $exe -ArgumentList @(
+    $arguments = @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
         "-STA",
         "-File", "`"$PSCommandPath`""
     )
+
+    if ($Anonymized) { $arguments += "-Anonymized" }
+    if ($SelfTest) { $arguments += "-SelfTest" }
+
+    Start-Process -FilePath $exe -ArgumentList $arguments
     exit
 }
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-[System.Windows.Forms.Application]::EnableVisualStyles()
+if ($Script:UseGui) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+}
 
 # ============================================================
 # CONFIG
 # ============================================================
 
 $Script:ScannerConfig = [ordered]@{
-    ProductName        = "Sagene Data IT Support System Scanner"
-    Vendor             = "Sagene Data"
-    Version            = "3.0.0"
-    EventLookbackDays  = 3
-    MaxEvents          = 20
-    DiskWarningPercent = 20
-    DiskCriticalPercent = 10
-    UptimeWarningHours = 168
-    HtmlFileName       = "SageneData-SystemReport.html"
-    TextFileName       = "SageneData-SystemReport.txt"
-    JsonFileName       = "SageneData-SystemReport.json"
+    ProductName          = "Sagene Data IT Support System Scanner"
+    Vendor               = "Sagene Data"
+    Version              = "4.0.0"
+    EventLookbackDays    = 3
+    MaxEvents            = 20
+    DiskWarningPercent   = 20
+    DiskCriticalPercent  = 10
+    UptimeWarningHours   = 168
+    UpdateWarningDays    = 45
+    OutputBaseName       = "SageneData-SystemReport"
+    ImportantServices    = @(
+        @{ Name = "EventLog"; Critical = $true;  Label = "Windows Event Log" },
+        @{ Name = "Winmgmt"; Critical = $true;  Label = "Windows Management Instrumentation" },
+        @{ Name = "Dhcp"; Critical = $true;  Label = "DHCP Client" },
+        @{ Name = "Dnscache"; Critical = $true;  Label = "DNS Client" },
+        @{ Name = "LanmanWorkstation"; Critical = $true; Label = "Workstation" },
+        @{ Name = "W32Time"; Critical = $false; Label = "Windows Time" },
+        @{ Name = "wuauserv"; Critical = $false; Label = "Windows Update" },
+        @{ Name = "BITS"; Critical = $false; Label = "Background Intelligent Transfer Service" },
+        @{ Name = "WinDefend"; Critical = $false; Label = "Microsoft Defender Antivirus Service" }
+    )
 }
 
 # ============================================================
@@ -87,12 +125,15 @@ function New-Check {
 
 function Add-Check {
     param(
-        [Parameter(Mandatory)]
         [System.Collections.Generic.List[object]]$Checks,
 
         [Parameter(Mandatory)]
         [object]$Check
     )
+
+    if ($null -eq $Checks) {
+        throw "Checks list is null."
+    }
 
     [void]$Checks.Add($Check)
 }
@@ -102,12 +143,15 @@ function Invoke-SafeSection {
         [Parameter(Mandatory)]
         [string]$Name,
 
-        [Parameter(Mandatory)]
         [System.Collections.Generic.List[object]]$Checks,
 
         [Parameter(Mandatory)]
         [scriptblock]$Script
     )
+
+    if ($null -eq $Checks) {
+        throw "Checks list is null."
+    }
 
     try {
         & $Script
@@ -121,7 +165,8 @@ function Invoke-SafeSection {
             -Recommendation "Run as Administrator and verify that required Windows modules are available.")
 
         [PSCustomObject]@{
-            Error = $true
+            Error   = $true
+            Section = $Name
             Message = $_.Exception.Message
         }
     }
@@ -153,10 +198,24 @@ function Get-StatusRank {
 function Get-OverallStatus {
     param([object[]]$Checks)
 
-    if ($Checks | Where-Object { $_.Status -eq "CRITICAL" }) { return "CRITICAL" }
-    if ($Checks | Where-Object { $_.Status -eq "WARNING" })  { return "WARNING" }
-    if ($Checks | Where-Object { $_.Status -eq "UNKNOWN" })  { return "UNKNOWN" }
+    if (@($Checks | Where-Object { $_.Status -eq "CRITICAL" }).Count -gt 0) { return "CRITICAL" }
+    if (@($Checks | Where-Object { $_.Status -eq "WARNING" }).Count -gt 0)  { return "WARNING" }
+    if (@($Checks | Where-Object { $_.Status -eq "UNKNOWN" }).Count -gt 0)  { return "UNKNOWN" }
     return "OK"
+}
+
+function Get-HealthScore {
+    param([object[]]$Checks)
+
+    if ($Checks.Count -eq 0) { return 0 }
+
+    $score = 100
+    $score -= (@($Checks | Where-Object Status -eq "CRITICAL").Count * 25)
+    $score -= (@($Checks | Where-Object Status -eq "WARNING").Count * 10)
+    $score -= (@($Checks | Where-Object Status -eq "UNKNOWN").Count * 4)
+
+    if ($score -lt 0) { return 0 }
+    return $score
 }
 
 function Get-StatusPrefix {
@@ -175,9 +234,7 @@ function Get-StatusPrefix {
 function ConvertTo-SafeText {
     param([object]$Value)
 
-    if ($null -eq $Value) {
-        return ""
-    }
+    if ($null -eq $Value) { return "" }
 
     $text = [string]$Value
     $text = $text -replace "`r|`n", " "
@@ -192,7 +249,10 @@ function ConvertTo-SafeText {
 
 function Protect-ReportText {
     param(
+        [Parameter(Mandatory)]
         [string]$Text,
+
+        [Parameter(Mandatory)]
         [object]$Report
     )
 
@@ -201,8 +261,9 @@ function Protect-ReportText {
     $sensitiveValues = @(
         $Report.Meta.ComputerName,
         $Report.Meta.UserName,
+        $Report.Meta.UserDomain,
         $Report.Meta.Domain
-    ) | Where-Object { $_ -and $_ -ne "" } | Select-Object -Unique
+    ) | Where-Object { $null -ne $_ -and [string]$_ -ne "" } | Select-Object -Unique
 
     foreach ($value in $sensitiveValues) {
         $escaped = [regex]::Escape([string]$value)
@@ -212,6 +273,7 @@ function Protect-ReportText {
     $result = $result -replace '\b(?:\d{1,3}\.){3}\d{1,3}\b', '[IP-ANONYMIZED]'
     $result = $result -replace '\b([A-Fa-f0-9]{2}:){5}[A-Fa-f0-9]{2}\b', '[MAC-ANONYMIZED]'
     $result = $result -replace '\bS-\d-\d+-(\d+-){1,14}\d+\b', '[SID-ANONYMIZED]'
+    $result = $result -replace '\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b', '[GUID-ANONYMIZED]'
 
     return $result
 }
@@ -231,7 +293,7 @@ function Get-SageneDataAsciiLogo {
 }
 
 function Get-PendingRebootEvidence {
-    $evidence = New-Object System.Collections.Generic.List[string]
+    $evidence = [System.Collections.Generic.List[string]]::new()
 
     $paths = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
@@ -241,9 +303,7 @@ function Get-PendingRebootEvidence {
     )
 
     foreach ($path in $paths) {
-        if (Test-Path $path) {
-            [void]$evidence.Add($path)
-        }
+        if (Test-Path $path) { [void]$evidence.Add($path) }
     }
 
     $sessionManager = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
@@ -263,8 +323,29 @@ function Get-PendingRebootEvidence {
     return $evidence
 }
 
+function Get-OutputPath {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Directory,
+
+        [Parameter(Mandatory)]
+        [string]$Format,
+
+        [switch]$Anonymized
+    )
+
+    $suffix = if ($Anonymized) { "-Anonymized" } else { "" }
+    $extension = switch ($Format) {
+        "TXT"  { "txt" }
+        "HTML" { "html" }
+        "JSON" { "json" }
+    }
+
+    Join-Path $Directory "$($Script:ScannerConfig.OutputBaseName)$suffix.$extension"
+}
+
 # ============================================================
-# COLLECTORS
+# COLLECTOR
 # ============================================================
 
 function Get-SystemScannerReport {
@@ -274,19 +355,19 @@ function Get-SystemScannerReport {
     $isAdmin = Get-IsAdministrator
 
     $meta = [ordered]@{
-        ProductName        = $Script:ScannerConfig.ProductName
-        Vendor             = $Script:ScannerConfig.Vendor
-        Version            = $Script:ScannerConfig.Version
-        GeneratedAt        = Get-Date
-        ReportId           = [guid]::NewGuid().ToString()
-        ComputerName       = $env:COMPUTERNAME
-        UserName           = $env:USERNAME
-        UserDomain         = $env:USERDOMAIN
-        Domain             = ""
-        IsAdministrator    = $isAdmin
-        PowerShellVersion  = $PSVersionTable.PSVersion.ToString()
-        PowerShellEdition  = $PSVersionTable.PSEdition
-        ProcessBitness     = if ([Environment]::Is64BitProcess) { "64-bit" } else { "32-bit" }
+        ProductName       = $Script:ScannerConfig.ProductName
+        Vendor            = $Script:ScannerConfig.Vendor
+        Version           = $Script:ScannerConfig.Version
+        GeneratedAt       = Get-Date
+        ReportId          = [guid]::NewGuid().ToString()
+        ComputerName      = $env:COMPUTERNAME
+        UserName          = $env:USERNAME
+        UserDomain        = $env:USERDOMAIN
+        Domain            = ""
+        IsAdministrator   = $isAdmin
+        PowerShellVersion = $PSVersionTable.PSVersion.ToString()
+        PowerShellEdition = $PSVersionTable.PSEdition
+        ProcessBitness    = if ([Environment]::Is64BitProcess) { "64-bit" } else { "32-bit" }
     }
 
     if ($isAdmin) {
@@ -317,26 +398,26 @@ function Get-SystemScannerReport {
         }
 
         [PSCustomObject]@{
-            ComputerName   = $env:COMPUTERNAME
-            UserName       = $env:USERNAME
-            Domain         = $cs.Domain
-            Manufacturer   = $cs.Manufacturer
-            Model          = $cs.Model
-            ChassisType    = ($cs.PCSystemTypeEx)
-            OS             = $os.Caption
-            OSVersion      = $os.Version
-            BuildNumber    = $os.BuildNumber
-            Architecture   = $os.OSArchitecture
-            InstallDate    = $os.InstallDate
-            LastBoot       = $os.LastBootUpTime
-            UptimeHours    = $uptimeHours
-            CPU            = $cpu.Name
-            CPUCores       = $cpu.NumberOfCores
-            CPULogical     = $cpu.NumberOfLogicalProcessors
-            RAMGB          = $ramGb
-            BIOSVersion    = $bios.SMBIOSBIOSVersion
-            BIOSSerial     = $bios.SerialNumber
-            Motherboard    = "$($board.Manufacturer) $($board.Product)"
+            ComputerName = $env:COMPUTERNAME
+            UserName     = $env:USERNAME
+            Domain       = $cs.Domain
+            Manufacturer = $cs.Manufacturer
+            Model        = $cs.Model
+            ChassisType  = $cs.PCSystemTypeEx
+            OS           = $os.Caption
+            OSVersion    = $os.Version
+            BuildNumber  = $os.BuildNumber
+            Architecture = $os.OSArchitecture
+            InstallDate  = $os.InstallDate
+            LastBoot     = $os.LastBootUpTime
+            UptimeHours  = $uptimeHours
+            CPU          = $cpu.Name
+            CPUCores     = $cpu.NumberOfCores
+            CPULogical   = $cpu.NumberOfLogicalProcessors
+            RAMGB        = $ramGb
+            BIOSVersion  = $bios.SMBIOSBIOSVersion
+            BIOSSerial   = $bios.SerialNumber
+            Motherboard  = "$($board.Manufacturer) $($board.Product)"
         }
     }
 
@@ -345,16 +426,11 @@ function Get-SystemScannerReport {
 
         if ($evidence.Count -gt 0) {
             Add-Check $checks (New-Check -Category "System" -Name "Pending reboot" -Status "WARNING" -Details "Windows has pending reboot evidence." -Recommendation "Restart machine before continuing troubleshooting.")
+            [PSCustomObject]@{ PendingReboot = $true; Evidence = ($evidence -join "; ") }
         }
         else {
             Add-Check $checks (New-Check -Category "System" -Name "Pending reboot" -Status "OK" -Details "No pending reboot evidence found.")
-        }
-
-        if ($evidence.Count -eq 0) {
             [PSCustomObject]@{ PendingReboot = $false; Evidence = "None" }
-        }
-        else {
-            [PSCustomObject]@{ PendingReboot = $true; Evidence = ($evidence -join "; ") }
         }
     }
 
@@ -516,15 +592,15 @@ function Get-SystemScannerReport {
         }
 
         [PSCustomObject]@{
-            AMServiceEnabled             = $mp.AMServiceEnabled
-            AntivirusEnabled            = $mp.AntivirusEnabled
-            RealTimeProtectionEnabled   = $mp.RealTimeProtectionEnabled
-            BehaviorMonitorEnabled      = $mp.BehaviorMonitorEnabled
-            IoavProtectionEnabled       = $mp.IoavProtectionEnabled
-            NISEnabled                  = $mp.NISEnabled
-            AntivirusSignatureUpdated   = $mp.AntivirusSignatureLastUpdated
-            QuickScanAge                = $mp.QuickScanAge
-            FullScanAge                 = $mp.FullScanAge
+            AMServiceEnabled           = $mp.AMServiceEnabled
+            AntivirusEnabled          = $mp.AntivirusEnabled
+            RealTimeProtectionEnabled = $mp.RealTimeProtectionEnabled
+            BehaviorMonitorEnabled    = $mp.BehaviorMonitorEnabled
+            IoavProtectionEnabled     = $mp.IoavProtectionEnabled
+            NISEnabled                = $mp.NISEnabled
+            SignatureUpdated          = $mp.AntivirusSignatureLastUpdated
+            QuickScanAge              = $mp.QuickScanAge
+            FullScanAge               = $mp.FullScanAge
         }
     }
 
@@ -562,9 +638,9 @@ function Get-SystemScannerReport {
             }
 
             [PSCustomObject]@{
-                Profile              = $_.Name
-                Enabled              = $_.Enabled
-                DefaultInboundAction = $_.DefaultInboundAction
+                Profile               = $_.Name
+                Enabled               = $_.Enabled
+                DefaultInboundAction  = $_.DefaultInboundAction
                 DefaultOutboundAction = $_.DefaultOutboundAction
             }
         }
@@ -603,14 +679,13 @@ function Get-SystemScannerReport {
 
     $sections["Windows Updates"] = Invoke-SafeSection -Name "Windows Updates" -Checks $checks -Script {
         $hotfixes = @(Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 10)
-
         $latest = $hotfixes | Select-Object -First 1
 
         if ($latest -and $latest.InstalledOn) {
             $days = (New-TimeSpan -Start $latest.InstalledOn -End (Get-Date)).TotalDays
 
-            if ($days -gt 45) {
-                Add-Check $checks (New-Check -Category "Updates" -Name "Latest installed update" -Status "WARNING" -Details "Latest hotfix appears older than 45 days: $($latest.HotFixID), $($latest.InstalledOn)." -Recommendation "Check Windows Update or management platform.")
+            if ($days -gt $Script:ScannerConfig.UpdateWarningDays) {
+                Add-Check $checks (New-Check -Category "Updates" -Name "Latest installed update" -Status "WARNING" -Details "Latest hotfix appears older than $($Script:ScannerConfig.UpdateWarningDays) days: $($latest.HotFixID), $($latest.InstalledOn)." -Recommendation "Check Windows Update or management platform.")
             }
             else {
                 Add-Check $checks (New-Check -Category "Updates" -Name "Latest installed update" -Status "OK" -Details "Recent hotfix found: $($latest.HotFixID), $($latest.InstalledOn).")
@@ -649,28 +724,12 @@ function Get-SystemScannerReport {
     }
 
     $sections["Important Services"] = Invoke-SafeSection -Name "Important Services" -Checks $checks -Script {
-        $importantServices = @(
-            @{ Name = "EventLog"; Critical = $true },
-            @{ Name = "Winmgmt"; Critical = $true },
-            @{ Name = "Dhcp"; Critical = $true },
-            @{ Name = "Dnscache"; Critical = $true },
-            @{ Name = "LanmanWorkstation"; Critical = $true },
-            @{ Name = "wuauserv"; Critical = $false },
-            @{ Name = "BITS"; Critical = $false },
-            @{ Name = "WinDefend"; Critical = $false }
-        )
-
-        foreach ($entry in $importantServices) {
+        foreach ($entry in $Script:ScannerConfig.ImportantServices) {
             $svc = Get-Service -Name $entry.Name -ErrorAction SilentlyContinue
 
             if (-not $svc) {
                 Add-Check $checks (New-Check -Category "Services" -Name "Service $($entry.Name)" -Status "UNKNOWN" -Details "Service not found.")
-                [PSCustomObject]@{
-                    Name        = $entry.Name
-                    DisplayName = "Not found"
-                    Status      = "Unknown"
-                    StartType   = "Unknown"
-                }
+                [PSCustomObject]@{ Name = $entry.Name; DisplayName = $entry.Label; Status = "Unknown"; StartType = "Unknown" }
                 continue
             }
 
@@ -688,22 +747,21 @@ function Get-SystemScannerReport {
     }
 
     $sections["Local Administrators"] = Invoke-SafeSection -Name "Local Administrators" -Checks $checks -Script {
-        try {
-            $members = @(Get-LocalGroupMember -Group "Administrators" -ErrorAction Stop)
-
-            if ($members.Count -gt 5) {
-                Add-Check $checks (New-Check -Category "Security" -Name "Local administrators" -Status "WARNING" -Details "$($members.Count) local administrator member(s) found." -Recommendation "Review local administrator membership.")
-            }
-            else {
-                Add-Check $checks (New-Check -Category "Security" -Name "Local administrators" -Status "INFO" -Details "$($members.Count) local administrator member(s) found.")
-            }
-
-            $members | Select-Object Name, ObjectClass, PrincipalSource
+        if (-not (Get-Command Get-LocalGroupMember -ErrorAction SilentlyContinue)) {
+            Add-Check $checks (New-Check -Category "Security" -Name "Local administrators" -Status "UNKNOWN" -Details "Get-LocalGroupMember is not available.")
+            return "Get-LocalGroupMember is not available."
         }
-        catch {
-            Add-Check $checks (New-Check -Category "Security" -Name "Local administrators" -Status "UNKNOWN" -Details "Could not read local administrators: $($_.Exception.Message)")
-            "Could not read local administrators."
+
+        $members = @(Get-LocalGroupMember -Group "Administrators" -ErrorAction Stop)
+
+        if ($members.Count -gt 5) {
+            Add-Check $checks (New-Check -Category "Security" -Name "Local administrators" -Status "WARNING" -Details "$($members.Count) local administrator member(s) found." -Recommendation "Review local administrator membership.")
         }
+        else {
+            Add-Check $checks (New-Check -Category "Security" -Name "Local administrators" -Status "INFO" -Details "$($members.Count) local administrator member(s) found.")
+        }
+
+        $members | Select-Object Name, ObjectClass, PrincipalSource
     }
 
     $sections["Battery"] = Invoke-SafeSection -Name "Battery" -Checks $checks -Script {
@@ -725,28 +783,6 @@ function Get-SystemScannerReport {
                     EstimatedRunTime         = $_.EstimatedRunTime
                 }
             }
-        }
-    }
-
-    $sections["Time Service"] = Invoke-SafeSection -Name "Time Service" -Checks $checks -Script {
-        $svc = Get-Service -Name W32Time -ErrorAction SilentlyContinue
-
-        if (-not $svc) {
-            Add-Check $checks (New-Check -Category "System" -Name "Windows Time" -Status "UNKNOWN" -Details "Windows Time service not found.")
-            return "Windows Time service not found."
-        }
-
-        if ($svc.Status -ne "Running") {
-            Add-Check $checks (New-Check -Category "System" -Name "Windows Time" -Status "WARNING" -Details "Windows Time service is not running." -Recommendation "Start Windows Time service if domain, Kerberos or certificate issues exist.")
-        }
-        else {
-            Add-Check $checks (New-Check -Category "System" -Name "Windows Time" -Status "OK" -Details "Windows Time service is running.")
-        }
-
-        [PSCustomObject]@{
-            ServiceName = $svc.Name
-            Status      = $svc.Status
-            StartType   = $svc.StartType
         }
     }
 
@@ -786,6 +822,7 @@ function Get-SystemScannerReport {
 
     $checksArray = @($checks)
     $overall = Get-OverallStatus -Checks $checksArray
+    $score = Get-HealthScore -Checks $checksArray
 
     $counts = [ordered]@{
         OK       = (@($checksArray | Where-Object Status -eq "OK")).Count
@@ -797,16 +834,17 @@ function Get-SystemScannerReport {
     }
 
     [PSCustomObject]@{
-        Meta     = [PSCustomObject]$meta
-        Overall  = $overall
-        Counts   = [PSCustomObject]$counts
-        Checks   = $checksArray | Sort-Object @{ Expression = { Get-StatusRank $_.Status }; Descending = $true }, Category, Name
-        Sections = $sections
+        Meta        = [PSCustomObject]$meta
+        Overall     = $overall
+        HealthScore = $score
+        Counts      = [PSCustomObject]$counts
+        Checks      = $checksArray | Sort-Object @{ Expression = { Get-StatusRank $_.Status }; Descending = $true }, Category, Name
+        Sections    = $sections
     }
 }
 
 # ============================================================
-# TEXT RENDERING
+# RENDERING
 # ============================================================
 
 function Convert-ReportToText {
@@ -840,6 +878,7 @@ function Convert-ReportToText {
     [void]$lines.Add(" HEALTH SUMMARY")
     [void]$lines.Add("============================================================")
     [void]$lines.Add("Overall status   : $($Report.Overall)")
+    [void]$lines.Add("Health score     : $($Report.HealthScore)/100")
     [void]$lines.Add("Critical         : $($Report.Counts.CRITICAL)")
     [void]$lines.Add("Warnings         : $($Report.Counts.WARNING)")
     [void]$lines.Add("Unknown          : $($Report.Counts.UNKNOWN)")
@@ -913,9 +952,6 @@ function Convert-ReportToHtml {
         [switch]$Anonymized
     )
 
-    $text = Convert-ReportToText -Report $Report -Anonymized:$Anonymized
-    $encoded = [System.Net.WebUtility]::HtmlEncode($text)
-
     $statusClass = switch ($Report.Overall) {
         "OK"       { "ok" }
         "WARNING"  { "warning" }
@@ -923,7 +959,60 @@ function Convert-ReportToHtml {
         default    { "unknown" }
     }
 
-@"
+    $findingsRows = foreach ($check in $Report.Checks) {
+        $status = [System.Net.WebUtility]::HtmlEncode($check.Status)
+        $category = [System.Net.WebUtility]::HtmlEncode($check.Category)
+        $name = [System.Net.WebUtility]::HtmlEncode($check.Name)
+        $details = [System.Net.WebUtility]::HtmlEncode($check.Details)
+        $action = [System.Net.WebUtility]::HtmlEncode($check.Recommendation)
+        "<tr><td class='s-$($check.Status.ToLower())'>$status</td><td>$category</td><td>$name</td><td>$details</td><td>$action</td></tr>"
+    }
+
+    $sectionBlocks = foreach ($sectionName in $Report.Sections.Keys) {
+        $section = $Report.Sections[$sectionName]
+        $safeName = [System.Net.WebUtility]::HtmlEncode($sectionName)
+
+        if ($null -eq $section) {
+            "<section><h2>$safeName</h2><p>No data.</p></section>"
+            continue
+        }
+
+        if ($section -is [string]) {
+            $safeText = [System.Net.WebUtility]::HtmlEncode($section)
+            "<section><h2>$safeName</h2><pre>$safeText</pre></section>"
+            continue
+        }
+
+        $items = @($section)
+        $rows = foreach ($item in $items) {
+            if ($item -is [string]) {
+                $safeText = [System.Net.WebUtility]::HtmlEncode($item)
+                "<tr><td colspan='2'>$safeText</td></tr>"
+                continue
+            }
+
+            foreach ($prop in $item.PSObject.Properties) {
+                $key = [System.Net.WebUtility]::HtmlEncode($prop.Name)
+                $value = [System.Net.WebUtility]::HtmlEncode((ConvertTo-SafeText -Value $prop.Value))
+                "<tr><th>$key</th><td>$value</td></tr>"
+            }
+            "<tr class='spacer'><td colspan='2'></td></tr>"
+        }
+
+        "<section><h2>$safeName</h2><table class='kv'>$($rows -join "`n")</table></section>"
+    }
+
+    $computer = [System.Net.WebUtility]::HtmlEncode($Report.Meta.ComputerName)
+    $user = [System.Net.WebUtility]::HtmlEncode($Report.Meta.UserName)
+    $domain = [System.Net.WebUtility]::HtmlEncode($Report.Meta.Domain)
+
+    if ($Anonymized) {
+        $computer = "[ANONYMIZED]"
+        $user = "[ANONYMIZED]"
+        $domain = "[ANONYMIZED]"
+    }
+
+    $html = @"
 <!doctype html>
 <html lang="en">
 <head>
@@ -931,32 +1020,35 @@ function Convert-ReportToHtml {
 <title>Sagene Data System Report</title>
 <style>
 :root {
-    --bg: #080808;
-    --panel: #121212;
-    --text: #e8e8e8;
-    --muted: #a0a0a0;
-    --line: #2b2b2b;
+    --bg: #070707;
+    --panel: #111111;
+    --panel2: #171717;
+    --text: #eeeeee;
+    --muted: #a6a6a6;
+    --line: #2c2c2c;
     --cyan: #00d9ff;
     --ok: #39d353;
+    --info: #58a6ff;
     --warning: #f7b731;
     --critical: #ff4d4d;
     --unknown: #b0b0b0;
 }
+* { box-sizing: border-box; }
 body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+    font-family: "Segoe UI", Arial, sans-serif;
 }
 .header {
-    padding: 24px 32px;
-    background: linear-gradient(90deg, #0f0f0f, #161616);
+    padding: 28px 34px;
+    background: linear-gradient(90deg, #101010, #181818);
     border-bottom: 1px solid var(--line);
 }
 .brand {
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: .12em;
 }
 .sub {
     margin-top: 6px;
@@ -964,346 +1056,500 @@ body {
 }
 .status {
     display: inline-block;
-    margin-top: 14px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-weight: 700;
+    margin-top: 16px;
+    padding: 9px 13px;
+    border-radius: 10px;
+    font-weight: 800;
 }
-.status.ok { background: rgba(57, 211, 83, .15); color: var(--ok); }
-.status.warning { background: rgba(247, 183, 49, .15); color: var(--warning); }
-.status.critical { background: rgba(255, 77, 77, .15); color: var(--critical); }
-.status.unknown { background: rgba(176, 176, 176, .15); color: var(--unknown); }
-main {
-    padding: 28px 32px;
+.status.ok { background: rgba(57, 211, 83, .14); color: var(--ok); }
+.status.warning { background: rgba(247, 183, 49, .14); color: var(--warning); }
+.status.critical { background: rgba(255, 77, 77, .14); color: var(--critical); }
+.status.unknown { background: rgba(176, 176, 176, .14); color: var(--unknown); }
+main { padding: 28px 34px; }
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
 }
-pre {
-    white-space: pre-wrap;
-    line-height: 1.45;
+.card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+}
+.card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.card .value { margin-top: 8px; font-size: 24px; font-weight: 800; }
+section {
+    margin-top: 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+}
+h2 {
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--panel2);
+    border-bottom: 1px solid var(--line);
+    font-size: 15px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+table { width: 100%; border-collapse: collapse; }
+th, td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
     font-size: 13px;
 }
+th { width: 240px; color: var(--muted); text-align: left; font-weight: 600; }
+.findings th { width: auto; }
+.spacer td { padding: 5px; background: #0b0b0b; }
+.s-ok { color: var(--ok); font-weight: 800; }
+.s-info { color: var(--info); font-weight: 800; }
+.s-warning { color: var(--warning); font-weight: 800; }
+.s-critical { color: var(--critical); font-weight: 800; }
+.s-unknown { color: var(--unknown); font-weight: 800; }
+pre { white-space: pre-wrap; padding: 14px 16px; margin: 0; color: var(--text); }
 </style>
 </head>
 <body>
 <div class="header">
     <div class="brand">SAGENE DATA</div>
     <div class="sub">IT Support System Scanner</div>
-    <div class="status $statusClass">STATUS: $($Report.Overall)</div>
+    <div class="status $statusClass">STATUS: $($Report.Overall) · SCORE: $($Report.HealthScore)/100</div>
 </div>
 <main>
-<pre>$encoded</pre>
+    <div class="cards">
+        <div class="card"><div class="label">Computer</div><div class="value">$computer</div></div>
+        <div class="card"><div class="label">User</div><div class="value">$user</div></div>
+        <div class="card"><div class="label">Domain</div><div class="value">$domain</div></div>
+        <div class="card"><div class="label">Critical</div><div class="value">$($Report.Counts.CRITICAL)</div></div>
+        <div class="card"><div class="label">Warnings</div><div class="value">$($Report.Counts.WARNING)</div></div>
+        <div class="card"><div class="label">Unknown</div><div class="value">$($Report.Counts.UNKNOWN)</div></div>
+    </div>
+
+    <section>
+        <h2>Actionable Findings</h2>
+        <table class="findings">
+            <tr><th>Status</th><th>Category</th><th>Name</th><th>Details</th><th>Action</th></tr>
+            $($findingsRows -join "`n")
+        </table>
+    </section>
+
+    $($sectionBlocks -join "`n")
 </main>
 </body>
 </html>
 "@
-}
 
-# ============================================================
-# GUI HELPERS
-# ============================================================
-
-function Get-StatusColor {
-    param([string]$Status)
-
-    switch ($Status) {
-        "OK"       { [System.Drawing.Color]::FromArgb(57, 211, 83) }
-        "INFO"     { [System.Drawing.Color]::FromArgb(88, 166, 255) }
-        "WARNING"  { [System.Drawing.Color]::FromArgb(247, 183, 49) }
-        "CRITICAL" { [System.Drawing.Color]::FromArgb(255, 77, 77) }
-        "UNKNOWN"  { [System.Drawing.Color]::FromArgb(176, 176, 176) }
-        default    { [System.Drawing.Color]::Gainsboro }
-    }
-}
-
-function Append-RichText {
-    param(
-        [Parameter(Mandatory)]
-        [System.Windows.Forms.RichTextBox]$Box,
-
-        [Parameter(Mandatory)]
-        [string]$Text,
-
-        [Parameter(Mandatory)]
-        [System.Drawing.Color]$Color,
-
-        [bool]$NewLine = $true,
-
-        [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular
-    )
-
-    $start = $Box.TextLength
-    $textToAdd = $Text + $(if ($NewLine) { "`r`n" } else { "" })
-
-    $Box.AppendText($textToAdd)
-    $Box.Select($start, $Text.Length)
-    $Box.SelectionColor = $Color
-    $Box.SelectionFont = New-Object System.Drawing.Font($Box.Font, $Style)
-    $Box.SelectionStart = $Box.TextLength
-    $Box.SelectionLength = 0
-    $Box.SelectionColor = $Box.ForeColor
-    $Box.SelectionFont = $Box.Font
-}
-
-function Render-ReportInBox {
-    param(
-        [Parameter(Mandatory)]
-        [System.Windows.Forms.RichTextBox]$Box,
-
-        [Parameter(Mandatory)]
-        [object]$Report
-    )
-
-    $Box.Clear()
-    $text = Convert-ReportToText -Report $Report
-    $lines = $text -split "`r?`n"
-
-    foreach ($line in $lines) {
-        if ($line -match "SAGENE DATA|IT SUPPORT SYSTEM SCANNER|^   _____|^  /|^ ___|^/____|^\s+/____") {
-            Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(0, 217, 255)) -Style ([System.Drawing.FontStyle]::Bold)
-        }
-        elseif ($line -match "^=+$") {
-            Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(70, 70, 70))
-        }
-        elseif ($line -match "^\s[A-Z][A-Z ]+$") {
-            Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(88, 166, 255)) -Style ([System.Drawing.FontStyle]::Bold)
-        }
-        elseif ($line -match "^\[OK\]") {
-            Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "OK")
-        }
-        elseif ($line -match "^\[INFO\]") {
-            Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "INFO")
-        }
-        elseif ($line -match "^\[WARN\]") {
-            Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "WARNING")
-        }
-        elseif ($line -match "^\[CRIT\]") {
-            Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "CRITICAL") -Style ([System.Drawing.FontStyle]::Bold)
-        }
-        elseif ($line -match "^\[UNKNOWN\]") {
-            Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "UNKNOWN")
-        }
-        elseif ($line -match "^\s+Action:") {
-            Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::Khaki)
-        }
-        else {
-            Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::Gainsboro)
-        }
+    if ($Anonymized) {
+        return Protect-ReportText -Text $html -Report $Report
     }
 
-    $Box.SelectionStart = 0
-    $Box.ScrollToCaret()
+    return $html
 }
 
-function Save-ReportFile {
+function Export-SystemScannerReport {
     param(
         [Parameter(Mandatory)]
         [object]$Report,
 
         [Parameter(Mandatory)]
-        [ValidateSet("TXT", "HTML", "JSON", "ANON_TXT", "ANON_HTML")]
-        [string]$Format
+        [string]$Directory,
+
+        [Parameter(Mandatory)]
+        [string[]]$Formats,
+
+        [switch]$Anonymized
     )
 
-    $dialog = New-Object System.Windows.Forms.SaveFileDialog
-    $dialog.InitialDirectory = [Environment]::GetFolderPath("Desktop")
-
-    switch ($Format) {
-        "TXT" {
-            $dialog.FileName = $Script:ScannerConfig.TextFileName
-            $dialog.Filter = "Text file (*.txt)|*.txt"
-        }
-        "HTML" {
-            $dialog.FileName = $Script:ScannerConfig.HtmlFileName
-            $dialog.Filter = "HTML file (*.html)|*.html"
-        }
-        "JSON" {
-            $dialog.FileName = $Script:ScannerConfig.JsonFileName
-            $dialog.Filter = "JSON file (*.json)|*.json"
-        }
-        "ANON_TXT" {
-            $dialog.FileName = "SageneData-SystemReport-Anonymized.txt"
-            $dialog.Filter = "Text file (*.txt)|*.txt"
-        }
-        "ANON_HTML" {
-            $dialog.FileName = "SageneData-SystemReport-Anonymized.html"
-            $dialog.Filter = "HTML file (*.html)|*.html"
-        }
+    if (-not (Test-Path $Directory)) {
+        New-Item -Path $Directory -ItemType Directory -Force | Out-Null
     }
 
-    if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-        return
+    $written = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($format in $Formats) {
+        $path = Get-OutputPath -Directory $Directory -Format $format -Anonymized:$Anonymized
+
+        switch ($format) {
+            "TXT" {
+                Convert-ReportToText -Report $Report -Anonymized:$Anonymized | Out-File -FilePath $path -Encoding UTF8
+            }
+            "HTML" {
+                Convert-ReportToHtml -Report $Report -Anonymized:$Anonymized | Out-File -FilePath $path -Encoding UTF8
+            }
+            "JSON" {
+                if ($Anonymized) {
+                    $text = $Report | ConvertTo-Json -Depth 12
+                    Protect-ReportText -Text $text -Report $Report | Out-File -FilePath $path -Encoding UTF8
+                }
+                else {
+                    $Report | ConvertTo-Json -Depth 12 | Out-File -FilePath $path -Encoding UTF8
+                }
+            }
+        }
+
+        [void]$written.Add($path)
     }
 
-    switch ($Format) {
-        "TXT" {
-            Convert-ReportToText -Report $Report | Out-File -FilePath $dialog.FileName -Encoding UTF8
-        }
-        "HTML" {
-            Convert-ReportToHtml -Report $Report | Out-File -FilePath $dialog.FileName -Encoding UTF8
-        }
-        "JSON" {
-            $Report | ConvertTo-Json -Depth 10 | Out-File -FilePath $dialog.FileName -Encoding UTF8
-        }
-        "ANON_TXT" {
-            Convert-ReportToText -Report $Report -Anonymized | Out-File -FilePath $dialog.FileName -Encoding UTF8
-        }
-        "ANON_HTML" {
-            Convert-ReportToHtml -Report $Report -Anonymized | Out-File -FilePath $dialog.FileName -Encoding UTF8
-        }
-    }
-
-    [System.Windows.Forms.MessageBox]::Show(
-        "Report saved:`n$($dialog.FileName)",
-        "Sagene Data Scanner",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-    ) | Out-Null
+    return $written
 }
 
 # ============================================================
 # GUI
 # ============================================================
 
-function Show-SystemScannerGui {
-    $form = New-Object System.Windows.Forms.Form
-    $form.Text = "Sagene Data — IT Support System Scanner"
-    $form.Size = New-Object System.Drawing.Size(1180, 820)
-    $form.MinimumSize = New-Object System.Drawing.Size(980, 650)
-    $form.StartPosition = "CenterScreen"
-    $form.BackColor = [System.Drawing.Color]::FromArgb(8, 8, 8)
+if ($Script:UseGui) {
+    function Get-StatusColor {
+        param([string]$Status)
 
-    $header = New-Object System.Windows.Forms.Panel
-    $header.Dock = "Top"
-    $header.Height = 78
-    $header.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
-    $form.Controls.Add($header)
-
-    $title = New-Object System.Windows.Forms.Label
-    $title.Text = "SAGENE DATA"
-    $title.ForeColor = [System.Drawing.Color]::White
-    $title.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
-    $title.AutoSize = $true
-    $title.Location = New-Object System.Drawing.Point(18, 12)
-    $header.Controls.Add($title)
-
-    $subtitle = New-Object System.Windows.Forms.Label
-    $subtitle.Text = "IT Support System Scanner"
-    $subtitle.ForeColor = [System.Drawing.Color]::Silver
-    $subtitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
-    $subtitle.AutoSize = $true
-    $subtitle.Location = New-Object System.Drawing.Point(21, 46)
-    $header.Controls.Add($subtitle)
-
-    $statusLabel = New-Object System.Windows.Forms.Label
-    $statusLabel.Text = "STATUS: SCANNING"
-    $statusLabel.ForeColor = [System.Drawing.Color]::Khaki
-    $statusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
-    $statusLabel.AutoSize = $true
-    $statusLabel.Anchor = "Top,Right"
-    $statusLabel.Location = New-Object System.Drawing.Point(930, 28)
-    $header.Controls.Add($statusLabel)
-
-    $buttonPanel = New-Object System.Windows.Forms.Panel
-    $buttonPanel.Dock = "Bottom"
-    $buttonPanel.Height = 52
-    $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
-    $form.Controls.Add($buttonPanel)
-
-    $rich = New-Object System.Windows.Forms.RichTextBox
-    $rich.Dock = "Fill"
-    $rich.ReadOnly = $true
-    $rich.BorderStyle = "None"
-    $rich.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 5)
-    $rich.ForeColor = [System.Drawing.Color]::Gainsboro
-    $rich.Font = New-Object System.Drawing.Font("Consolas", 10)
-    $rich.WordWrap = $false
-    $form.Controls.Add($rich)
-
-    $script:CurrentReport = $null
-
-    function New-Button {
-        param(
-            [string]$Text,
-            [int]$X,
-            [scriptblock]$OnClick,
-            [int]$Width = 118
-        )
-
-        $button = New-Object System.Windows.Forms.Button
-        $button.Text = $Text
-        $button.Width = $Width
-        $button.Height = 32
-        $button.Location = New-Object System.Drawing.Point($X, 10)
-        $button.BackColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
-        $button.ForeColor = [System.Drawing.Color]::White
-        $button.FlatStyle = "Flat"
-        $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
-        $button.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-        $button.Add_Click($OnClick)
-        $buttonPanel.Controls.Add($button)
-        return $button
+        switch ($Status) {
+            "OK"       { [System.Drawing.Color]::FromArgb(57, 211, 83) }
+            "INFO"     { [System.Drawing.Color]::FromArgb(88, 166, 255) }
+            "WARNING"  { [System.Drawing.Color]::FromArgb(247, 183, 49) }
+            "CRITICAL" { [System.Drawing.Color]::FromArgb(255, 77, 77) }
+            "UNKNOWN"  { [System.Drawing.Color]::FromArgb(176, 176, 176) }
+            default    { [System.Drawing.Color]::Gainsboro }
+        }
     }
 
-    New-Button -Text "Rescan" -X 12 -OnClick {
-        $rich.Clear()
-        Append-RichText -Box $rich -Text "Scanning..." -Color ([System.Drawing.Color]::Khaki)
-        $form.Refresh()
+    function Append-RichText {
+        param(
+            [Parameter(Mandatory)]
+            [System.Windows.Forms.RichTextBox]$Box,
 
-        $script:CurrentReport = Get-SystemScannerReport
-        $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall)"
-        $statusLabel.ForeColor = Get-StatusColor $script:CurrentReport.Overall
-        Render-ReportInBox -Box $rich -Report $script:CurrentReport
-    } | Out-Null
+            [Parameter(Mandatory)]
+            [string]$Text,
 
-    New-Button -Text "Save TXT" -X 140 -OnClick {
-        if ($script:CurrentReport) { Save-ReportFile -Report $script:CurrentReport -Format "TXT" }
-    } | Out-Null
+            [Parameter(Mandatory)]
+            [System.Drawing.Color]$Color,
 
-    New-Button -Text "Save HTML" -X 268 -OnClick {
-        if ($script:CurrentReport) { Save-ReportFile -Report $script:CurrentReport -Format "HTML" }
-    } | Out-Null
+            [bool]$NewLine = $true,
 
-    New-Button -Text "Save JSON" -X 396 -OnClick {
-        if ($script:CurrentReport) { Save-ReportFile -Report $script:CurrentReport -Format "JSON" }
-    } | Out-Null
+            [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular
+        )
 
-    New-Button -Text "Save Anon TXT" -X 524 -Width 140 -OnClick {
-        if ($script:CurrentReport) { Save-ReportFile -Report $script:CurrentReport -Format "ANON_TXT" }
-    } | Out-Null
+        $start = $Box.TextLength
+        $textToAdd = $Text + $(if ($NewLine) { "`r`n" } else { "" })
 
-    New-Button -Text "Save Anon HTML" -X 674 -Width 150 -OnClick {
-        if ($script:CurrentReport) { Save-ReportFile -Report $script:CurrentReport -Format "ANON_HTML" }
-    } | Out-Null
+        $Box.AppendText($textToAdd)
+        $Box.Select($start, $Text.Length)
+        $Box.SelectionColor = $Color
+        $Box.SelectionFont = New-Object System.Drawing.Font($Box.Font, $Style)
+        $Box.SelectionStart = $Box.TextLength
+        $Box.SelectionLength = 0
+        $Box.SelectionColor = $Box.ForeColor
+        $Box.SelectionFont = $Box.Font
+    }
 
-    New-Button -Text "Copy Summary" -X 834 -Width 140 -OnClick {
-        if ($script:CurrentReport) {
-            $summary = @()
-            $summary += "Sagene Data System Scanner"
-            $summary += "Status: $($script:CurrentReport.Overall)"
-            $summary += "Critical: $($script:CurrentReport.Counts.CRITICAL)"
-            $summary += "Warnings: $($script:CurrentReport.Counts.WARNING)"
-            $summary += "Unknown: $($script:CurrentReport.Counts.UNKNOWN)"
-            $summary += ""
-            $summary += "Findings:"
-            $summary += $script:CurrentReport.Checks |
-                Where-Object { $_.Status -in @("CRITICAL", "WARNING", "UNKNOWN") } |
-                ForEach-Object { "$(Get-StatusPrefix $_.Status) $($_.Name): $($_.Details)" }
+    function Render-ReportInBox {
+        param(
+            [Parameter(Mandatory)]
+            [System.Windows.Forms.RichTextBox]$Box,
 
-            [System.Windows.Forms.Clipboard]::SetText(($summary -join "`r`n"))
-            [System.Windows.Forms.MessageBox]::Show("Summary copied to clipboard.", "Sagene Data Scanner") | Out-Null
+            [Parameter(Mandatory)]
+            [object]$Report
+        )
+
+        $Box.Clear()
+        $text = Convert-ReportToText -Report $Report
+        $lines = $text -split "`r?`n"
+
+        foreach ($line in $lines) {
+            if ($line -match "SAGENE DATA|IT SUPPORT SYSTEM SCANNER|^   _____|^  /|^ ___|^/____|^\s+/____") {
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(0, 217, 255)) -Style ([System.Drawing.FontStyle]::Bold)
+            }
+            elseif ($line -match "^=+$") {
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(70, 70, 70))
+            }
+            elseif ($line -match "^\s[A-Z][A-Z ]+$") {
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::FromArgb(88, 166, 255)) -Style ([System.Drawing.FontStyle]::Bold)
+            }
+            elseif ($line -match "^\[OK\]") {
+                Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "OK")
+            }
+            elseif ($line -match "^\[INFO\]") {
+                Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "INFO")
+            }
+            elseif ($line -match "^\[WARN\]") {
+                Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "WARNING")
+            }
+            elseif ($line -match "^\[CRIT\]") {
+                Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "CRITICAL") -Style ([System.Drawing.FontStyle]::Bold)
+            }
+            elseif ($line -match "^\[UNKNOWN\]") {
+                Append-RichText -Box $Box -Text $line -Color (Get-StatusColor "UNKNOWN")
+            }
+            elseif ($line -match "^\s+Action:") {
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::Khaki)
+            }
+            else {
+                Append-RichText -Box $Box -Text $line -Color ([System.Drawing.Color]::Gainsboro)
+            }
         }
-    } | Out-Null
 
-    $form.Add_Shown({
-        Append-RichText -Box $rich -Text "Scanning..." -Color ([System.Drawing.Color]::Khaki)
-        $form.Refresh()
+        $Box.SelectionStart = 0
+        $Box.ScrollToCaret()
+    }
 
-        $script:CurrentReport = Get-SystemScannerReport
-        $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall)"
-        $statusLabel.ForeColor = Get-StatusColor $script:CurrentReport.Overall
-        Render-ReportInBox -Box $rich -Report $script:CurrentReport
-    })
+    function Save-ReportFileDialog {
+        param(
+            [Parameter(Mandatory)]
+            [object]$Report,
 
-    [void]$form.ShowDialog()
+            [Parameter(Mandatory)]
+            [ValidateSet("TXT", "HTML", "JSON")]
+            [string]$Format,
+
+            [switch]$Anonymized
+        )
+
+        $dialog = New-Object System.Windows.Forms.SaveFileDialog
+        $dialog.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+        $dialog.FileName = Split-Path -Leaf (Get-OutputPath -Directory $dialog.InitialDirectory -Format $Format -Anonymized:$Anonymized)
+
+        switch ($Format) {
+            "TXT"  { $dialog.Filter = "Text file (*.txt)|*.txt" }
+            "HTML" { $dialog.Filter = "HTML file (*.html)|*.html" }
+            "JSON" { $dialog.Filter = "JSON file (*.json)|*.json" }
+        }
+
+        if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
+        switch ($Format) {
+            "TXT" {
+                Convert-ReportToText -Report $Report -Anonymized:$Anonymized | Out-File -FilePath $dialog.FileName -Encoding UTF8
+            }
+            "HTML" {
+                Convert-ReportToHtml -Report $Report -Anonymized:$Anonymized | Out-File -FilePath $dialog.FileName -Encoding UTF8
+            }
+            "JSON" {
+                if ($Anonymized) {
+                    $json = $Report | ConvertTo-Json -Depth 12
+                    Protect-ReportText -Text $json -Report $Report | Out-File -FilePath $dialog.FileName -Encoding UTF8
+                }
+                else {
+                    $Report | ConvertTo-Json -Depth 12 | Out-File -FilePath $dialog.FileName -Encoding UTF8
+                }
+            }
+        }
+
+        [System.Windows.Forms.MessageBox]::Show("Report saved:`n$($dialog.FileName)", "Sagene Data Scanner") | Out-Null
+    }
+
+    function Show-SystemScannerGui {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = "Sagene Data — IT Support System Scanner"
+        $form.Size = New-Object System.Drawing.Size(1220, 850)
+        $form.MinimumSize = New-Object System.Drawing.Size(980, 650)
+        $form.StartPosition = "CenterScreen"
+        $form.BackColor = [System.Drawing.Color]::FromArgb(8, 8, 8)
+
+        $header = New-Object System.Windows.Forms.Panel
+        $header.Dock = "Top"
+        $header.Height = 82
+        $header.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
+        $form.Controls.Add($header)
+
+        $title = New-Object System.Windows.Forms.Label
+        $title.Text = "SAGENE DATA"
+        $title.ForeColor = [System.Drawing.Color]::White
+        $title.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+        $title.AutoSize = $true
+        $title.Location = New-Object System.Drawing.Point(18, 12)
+        $header.Controls.Add($title)
+
+        $subtitle = New-Object System.Windows.Forms.Label
+        $subtitle.Text = "IT Support System Scanner"
+        $subtitle.ForeColor = [System.Drawing.Color]::Silver
+        $subtitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+        $subtitle.AutoSize = $true
+        $subtitle.Location = New-Object System.Drawing.Point(21, 48)
+        $header.Controls.Add($subtitle)
+
+        $statusLabel = New-Object System.Windows.Forms.Label
+        $statusLabel.Text = "STATUS: SCANNING"
+        $statusLabel.ForeColor = [System.Drawing.Color]::Khaki
+        $statusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+        $statusLabel.AutoSize = $true
+        $statusLabel.Anchor = "Top,Right"
+        $statusLabel.Location = New-Object System.Drawing.Point(930, 28)
+        $header.Controls.Add($statusLabel)
+
+        $buttonPanel = New-Object System.Windows.Forms.Panel
+        $buttonPanel.Dock = "Bottom"
+        $buttonPanel.Height = 56
+        $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
+        $form.Controls.Add($buttonPanel)
+
+        $rich = New-Object System.Windows.Forms.RichTextBox
+        $rich.Dock = "Fill"
+        $rich.ReadOnly = $true
+        $rich.BorderStyle = "None"
+        $rich.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 5)
+        $rich.ForeColor = [System.Drawing.Color]::Gainsboro
+        $rich.Font = New-Object System.Drawing.Font("Consolas", 10)
+        $rich.WordWrap = $false
+        $form.Controls.Add($rich)
+
+        $script:CurrentReport = $null
+
+        function New-ScannerButton {
+            param(
+                [string]$Text,
+                [int]$X,
+                [scriptblock]$OnClick,
+                [int]$Width = 118
+            )
+
+            $button = New-Object System.Windows.Forms.Button
+            $button.Text = $Text
+            $button.Width = $Width
+            $button.Height = 34
+            $button.Location = New-Object System.Drawing.Point($X, 11)
+            $button.BackColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
+            $button.ForeColor = [System.Drawing.Color]::White
+            $button.FlatStyle = "Flat"
+            $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+            $button.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+            $button.Add_Click($OnClick)
+            $buttonPanel.Controls.Add($button)
+            return $button
+        }
+
+        New-ScannerButton -Text "Rescan" -X 12 -OnClick {
+            $rich.Clear()
+            Append-RichText -Box $rich -Text "Scanning..." -Color ([System.Drawing.Color]::Khaki)
+            $form.Refresh()
+
+            $script:CurrentReport = Get-SystemScannerReport
+            $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall) · SCORE: $($script:CurrentReport.HealthScore)/100"
+            $statusLabel.ForeColor = Get-StatusColor $script:CurrentReport.Overall
+            Render-ReportInBox -Box $rich -Report $script:CurrentReport
+        } | Out-Null
+
+        New-ScannerButton -Text "Save TXT" -X 140 -OnClick {
+            if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "TXT" }
+        } | Out-Null
+
+        New-ScannerButton -Text "Save HTML" -X 268 -OnClick {
+            if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "HTML" }
+        } | Out-Null
+
+        New-ScannerButton -Text "Save JSON" -X 396 -OnClick {
+            if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "JSON" }
+        } | Out-Null
+
+        New-ScannerButton -Text "Anon TXT" -X 524 -Width 110 -OnClick {
+            if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "TXT" -Anonymized }
+        } | Out-Null
+
+        New-ScannerButton -Text "Anon HTML" -X 644 -Width 115 -OnClick {
+            if ($script:CurrentReport) { Save-ReportFileDialog -Report $script:CurrentReport -Format "HTML" -Anonymized }
+        } | Out-Null
+
+        New-ScannerButton -Text "Copy Summary" -X 769 -Width 130 -OnClick {
+            if ($script:CurrentReport) {
+                $summary = @()
+                $summary += "Sagene Data System Scanner"
+                $summary += "Status: $($script:CurrentReport.Overall)"
+                $summary += "Health score: $($script:CurrentReport.HealthScore)/100"
+                $summary += "Critical: $($script:CurrentReport.Counts.CRITICAL)"
+                $summary += "Warnings: $($script:CurrentReport.Counts.WARNING)"
+                $summary += "Unknown: $($script:CurrentReport.Counts.UNKNOWN)"
+                $summary += ""
+                $summary += "Findings:"
+                $summary += $script:CurrentReport.Checks |
+                    Where-Object { $_.Status -in @("CRITICAL", "WARNING", "UNKNOWN") } |
+                    ForEach-Object { "$(Get-StatusPrefix $_.Status) $($_.Name): $($_.Details)" }
+
+                [System.Windows.Forms.Clipboard]::SetText(($summary -join "`r`n"))
+                [System.Windows.Forms.MessageBox]::Show("Summary copied to clipboard.", "Sagene Data Scanner") | Out-Null
+            }
+        } | Out-Null
+
+        $form.Add_Shown({
+            Append-RichText -Box $rich -Text "Scanning..." -Color ([System.Drawing.Color]::Khaki)
+            $form.Refresh()
+
+            $script:CurrentReport = Get-SystemScannerReport
+            $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall) · SCORE: $($script:CurrentReport.HealthScore)/100"
+            $statusLabel.ForeColor = Get-StatusColor $script:CurrentReport.Overall
+            Render-ReportInBox -Box $rich -Report $script:CurrentReport
+        })
+
+        [void]$form.ShowDialog()
+    }
+}
+
+# ============================================================
+# SELF TEST
+# ============================================================
+
+function Invoke-ScannerSelfTest {
+    $failures = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($fn in @(
+        "New-Check",
+        "Add-Check",
+        "Invoke-SafeSection",
+        "Get-SystemScannerReport",
+        "Convert-ReportToText",
+        "Convert-ReportToHtml",
+        "Export-SystemScannerReport"
+    )) {
+        if (-not (Get-Command $fn -ErrorAction SilentlyContinue)) {
+            [void]$failures.Add("Missing function: $fn")
+        }
+    }
+
+    $testChecks = [System.Collections.Generic.List[object]]::new()
+    Add-Check -Checks $testChecks -Check (New-Check -Name "Self test" -Status "OK" -Details "Check collection works." -Category "SelfTest")
+
+    if ($testChecks.Count -ne 1) {
+        [void]$failures.Add("Add-Check failed.")
+    }
+
+    if ($failures.Count -gt 0) {
+        throw "Self-test failed: $($failures -join '; ')"
+    }
+
+    return "Self-test OK."
+}
+
+# ============================================================
+# ENTRYPOINT
+# ============================================================
+
+if ($SelfTest) {
+    Invoke-ScannerSelfTest | Write-Host
+}
+
+if ($NoGui) {
+    $report = Get-SystemScannerReport
+
+    if (-not $ExportDirectory) {
+        $ExportDirectory = Join-Path (Get-Location) "reports"
+    }
+
+    $paths = Export-SystemScannerReport -Report $report -Directory $ExportDirectory -Formats $Formats -Anonymized:$Anonymized
+
+    Write-Host "Sagene Data System Scanner"
+    Write-Host "Status: $($report.Overall)"
+    Write-Host "Health score: $($report.HealthScore)/100"
+    Write-Host "Critical: $($report.Counts.CRITICAL)"
+    Write-Host "Warnings: $($report.Counts.WARNING)"
+    Write-Host "Unknown: $($report.Counts.UNKNOWN)"
+    Write-Host ""
+    Write-Host "Written files:"
+    foreach ($path in $paths) {
+        Write-Host "- $path"
+    }
+
+    exit
 }
 
 Show-SystemScannerGui
