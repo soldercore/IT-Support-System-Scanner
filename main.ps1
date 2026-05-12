@@ -80,7 +80,7 @@ public static class NativeMethods {
 $Script:ScannerConfig = [ordered]@{
     ProductName          = "Sagene Data IT Support System Scanner"
     Vendor               = "Sagene Data"
-    Version              = "4.1.0-layout-fixed"
+    Version              = "4.2.0-ascii-safe"
     EventLookbackDays    = 3
     MaxEvents            = 20
     DiskWarningPercent   = 20
@@ -288,14 +288,14 @@ function Protect-ReportText {
 
 function Get-SageneDataAsciiLogo {
 @"
-███████╗ █████╗  ██████╗ ███████╗███╗   ██╗███████╗    ██████╗  █████╗ ████████╗ █████╗
-██╔════╝██╔══██╗██╔════╝ ██╔════╝████╗  ██║██╔════╝    ██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗
-███████╗███████║██║  ███╗█████╗  ██╔██╗ ██║█████╗      ██║  ██║███████║   ██║   ███████║
-╚════██║██╔══██║██║   ██║██╔══╝  ██║╚██╗██║██╔══╝      ██║  ██║██╔══██║   ██║   ██╔══██║
-███████║██║  ██║╚██████╔╝███████╗██║ ╚████║███████╗    ██████╔╝██║  ██║   ██║   ██║  ██║
-╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚══════╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
+  ____                                   ____        _
+ / ___|  __ _  __ _  ___ _ __   ___    |  _ \  __ _| |_ __ _
+ \___ \ / _` |/ _` |/ _ \ '_ \ / _ \   | | | |/ _` | __/ _` |
+  ___) | (_| | (_| |  __/ | | |  __/   | |_| | (_| | || (_| |
+ |____/ \__,_|\__, |\___|_| |_|\___|   |____/ \__,_|\__\__,_|
+              |___/
 
-                         IT SUPPORT SYSTEM SCANNER
+        SAGENE DATA - IT SUPPORT SYSTEM SCANNER
 "@
 }
 
@@ -1122,7 +1122,7 @@ pre { white-space: pre-wrap; padding: 14px 16px; margin: 0; color: var(--text); 
 <div class="header">
     <div class="brand">SAGENE DATA</div>
     <div class="sub">IT Support System Scanner</div>
-    <div class="status $statusClass">STATUS: $($Report.Overall) · SCORE: $($Report.HealthScore)/100</div>
+    <div class="status $statusClass">STATUS: $($Report.Overall) | SCORE: $($Report.HealthScore)/100</div>
 </div>
 <main>
     <div class="cards">
@@ -1366,7 +1366,7 @@ if ($Script:UseGui) {
 
     function Show-SystemScannerGui {
         $form = New-Object System.Windows.Forms.Form
-        $form.Text = "Sagene Data — IT Support System Scanner"
+        $form.Text = "Sagene Data - IT Support System Scanner"
         $form.Size = New-Object System.Drawing.Size(1240, 860)
         $form.MinimumSize = New-Object System.Drawing.Size(1040, 700)
         $form.StartPosition = "CenterScreen"
@@ -1480,7 +1480,7 @@ if ($Script:UseGui) {
             $form.Refresh()
 
             $script:CurrentReport = Get-SystemScannerReport
-            $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall) · SCORE: $($script:CurrentReport.HealthScore)/100"
+            $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall) | SCORE: $($script:CurrentReport.HealthScore)/100"
             $statusLabel.ForeColor = Get-StatusColor $script:CurrentReport.Overall
             Render-ReportInBox -Box $rich -Report $script:CurrentReport
         } | Out-Null
@@ -1530,7 +1530,7 @@ if ($Script:UseGui) {
             $form.Refresh()
 
             $script:CurrentReport = Get-SystemScannerReport
-            $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall) · SCORE: $($script:CurrentReport.HealthScore)/100"
+            $statusLabel.Text = "STATUS: $($script:CurrentReport.Overall) | SCORE: $($script:CurrentReport.HealthScore)/100"
             $statusLabel.ForeColor = Get-StatusColor $script:CurrentReport.Overall
             Render-ReportInBox -Box $rich -Report $script:CurrentReport
         })
